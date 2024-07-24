@@ -63,6 +63,34 @@ class OrderController extends Controller
      *  Mirrors POSController::loadOrderForEdit so it works the same whether
      *  the cashier types the order number on the billing screen or an
      *  admin clicks "Edit" from this Orders list. */
+    /** Backdate/correct an order's date & time (e.g. entering a sale that
+     *  actually happened yesterday). Admin/manager only — same permission
+     *  level as editing an order's items. Moves both created_at (drives the
+     *  invoice date, the Orders list, and the customer ledger) and, if the
+     *  order was already completed before, original_completed_at too (the
+     *  field the monthly sales graphs group by), so reports for the new
+     *  date/old date both stay correct. */
+    public function changeDate(Request $request, Order $order)
+    {
+        if (!in_array($order->status, ['completed', 'cancelled'])) {
+            return back()->withErrors(['error' => 'Only completed or cancelled orders can have their date changed.']);
+        }
+
+        $data = $request->validate([
+            'order_date' => ['required', 'date'],
+        ]);
+
+        $newDate = \Carbon\Carbon::parse($data['order_date']);
+
+        $order->created_at = $newDate;
+        if ($order->original_completed_at) {
+            $order->original_completed_at = $newDate;
+        }
+        $order->save();
+
+        return back()->with('status', "Order {$order->order_number} date changed to {$newDate->format('Y-m-d H:i')}.");
+    }
+
     public function edit(Order $order)
     {
         if ($order->status !== 'completed') {

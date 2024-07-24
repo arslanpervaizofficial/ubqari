@@ -67,7 +67,18 @@
         <tr class="border-t">
             @if(auth()->user()->role === 'admin')<td class="p-3">@if(in_array($o->status, ['completed', 'cancelled']))<input type="checkbox" data-bulk-item="orders" value="{{ $o->id }}">@endif</td>@endif
             <td class="p-3 font-medium">{{ $o->order_number }}</td>
-            <td class="p-3">{{ $o->created_at->format('Y-m-d H:i') }}</td>
+            <td class="p-3">
+                <span id="date-display-{{ $o->id }}">{{ $o->created_at->format('Y-m-d H:i') }}</span>
+                @if(in_array(auth()->user()->role, ['admin', 'manager']) && in_array($o->status, ['completed', 'cancelled']))
+                    <button type="button" class="text-xs text-blue-600 underline ml-1" onclick="toggleDateForm({{ $o->id }})">edit</button>
+                    <form id="date-form-{{ $o->id }}" method="POST" action="{{ route('orders.change-date', $o) }}" class="hidden mt-1 flex items-center gap-1">
+                        @csrf
+                        <input type="datetime-local" name="order_date" value="{{ $o->created_at->format('Y-m-d\TH:i') }}" class="border rounded px-1 py-0.5 text-xs" required>
+                        <button class="btn btn-blue !px-2 !py-0.5 text-xs">Save</button>
+                        <button type="button" class="btn btn-gray !px-2 !py-0.5 text-xs" onclick="toggleDateForm({{ $o->id }})">Cancel</button>
+                    </form>
+                @endif
+            </td>
             <td class="p-3">{{ $o->customer->name ?? 'Walk-in' }}</td>
             <td class="p-3">{{ $o->cashier->name ?? '—' }}</td>
             <td class="p-3">{{ $o->items_count }}</td>
@@ -103,5 +114,14 @@
 document.getElementById('range-select').addEventListener('change', function () {
     document.getElementById('custom-range-fields').classList.toggle('hidden', this.value !== 'custom');
 });
+
+// Shows/hides the small inline "change order date" form under an order's
+// date in the list, so backdating a mistakenly-dated order doesn't require
+// reopening and re-completing the whole sale (which is what used to cause
+// the "GET .../complete not allowed" error on a stray page refresh).
+function toggleDateForm(orderId) {
+    const form = document.getElementById('date-form-' + orderId);
+    if (form) form.classList.toggle('hidden');
+}
 </script>
 @endsection

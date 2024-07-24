@@ -51,6 +51,18 @@ Route::middleware('auth')->group(function () {
         Route::post('/set-customer', [POSController::class, 'setCustomer'])->name('set-customer');
         Route::post('/set-discount', [POSController::class, 'setOverallDiscount'])->name('set-discount');
         Route::post('/{order}/complete', [POSController::class, 'complete'])->name('complete');
+        // A plain browser refresh right after completing an order re-sends
+        // the page's last request, which for this URL was the POST above —
+        // but some browsers (and "open link in new tab"/back-forward cache)
+        // replay it as a GET instead, which used to hit Laravel's default
+        // 405 error page. Catch that here and just send them somewhere
+        // useful instead of an error screen: the invoice if the order went
+        // through, otherwise back to the register.
+        Route::get('/{order}/complete', function (\App\Models\Order $order) {
+            return $order->status === 'completed'
+                ? redirect()->route('pos.invoice', $order)
+                : redirect()->route('pos.index');
+        });
         Route::post('/{order}/quotation', [POSController::class, 'saveAsQuotation'])->name('quotation');
         Route::post('/{order}/cancel', [POSController::class, 'cancel'])->name('cancel');
         Route::get('/{order}/invoice', [POSController::class, 'invoice'])->name('invoice');
@@ -96,6 +108,7 @@ Route::middleware('auth')->group(function () {
         Route::get('orders', [OrderController::class, 'index'])->name('orders.index');
         Route::post('orders/{order}/edit', [OrderController::class, 'edit'])->name('orders.edit');
         Route::get('orders/{order}/ledger', [OrderController::class, 'ledger'])->name('orders.ledger');
+        Route::post('orders/{order}/change-date', [OrderController::class, 'changeDate'])->name('orders.change-date');
         Route::post('orders/{order}/payment', [OrderController::class, 'recordPayment'])->name('orders.record-payment');
 
         Route::get('stock-returns', [StockReturnController::class, 'index'])->name('stock-returns.index');
