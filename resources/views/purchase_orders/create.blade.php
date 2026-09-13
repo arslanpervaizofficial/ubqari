@@ -142,7 +142,7 @@ async function searchProducts(q) {
     }
 }
 
-function addLine(productId = null, qty = '', cost = null) {
+function addLine(productId = null, qty = '', cost = null, focusSearch = false) {
     const i = lineCount++;
     const preset = productId ? findLocalProduct(productId) : null;
 
@@ -162,7 +162,12 @@ function addLine(productId = null, qty = '', cost = null) {
         <td class="px-4"><input type="number" step="0.01" min="0" max="100" name="items[${i}][max_discount_percent]" value="${preset ? preset.max_discount : 0}" class="po-max-discount border rounded px-2 py-1 w-20"></td>
         <td class="px-4 po-line-total font-medium">0.00</td>
         <td><button type="button" class="remove-line text-red-600"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></button></td>`;
-    document.getElementById('po-items').appendChild(tr);
+    // New lines go to the TOP, not the bottom — same "reverse" system as
+    // billing's cart, so the row you're about to fill in next is always
+    // right there next to the "+ Add another product" control instead of
+    // requiring a scroll down as the order grows.
+    const poItemsBody = document.getElementById('po-items');
+    poItemsBody.insertBefore(tr, poItemsBody.firstChild);
 
     // dataset used by recalc() for remaining/new stock + unit display
     const idInput = tr.querySelector('.po-product-id');
@@ -172,6 +177,7 @@ function addLine(productId = null, qty = '', cost = null) {
     }
 
     const searchInput = tr.querySelector('.po-product-search');
+    const qtyInput = tr.querySelector('.po-qty');
     const costInput = tr.querySelector('.po-cost');
     const discountInput = tr.querySelector('.po-discount');
     const maxDiscountInput = tr.querySelector('.po-max-discount');
@@ -206,6 +212,28 @@ function addLine(productId = null, qty = '', cost = null) {
     const widget = { tr, resultsBox, reposition: positionResultsBox };
     searchWidgets.push(widget);
 
+    // Mirrors the billing page's search-dropdown state (currentResults +
+    // highlightedIndex) but scoped per-row here, since each PO line has its
+    // own independent product search box rather than one shared one.
+    let currentResults = [];
+    let highlightedIndex = -1;
+
+    function focusAndSelect(el) {
+        if (!el) return;
+        el.focus();
+        if (el.select) el.select();
+    }
+
+    function highlightResult(index) {
+        const items = resultsBox.querySelectorAll('.po-result-item');
+        items.forEach(el => el.classList.remove('bg-blue-100'));
+        if (index >= 0 && index < items.length) {
+            items[index].classList.add('bg-blue-100');
+            items[index].scrollIntoView({ block: 'nearest' });
+        }
+        highlightedIndex = index;
+    }
+
     function selectProduct(p) {
         idInput.value = p.id;
         idInput.dataset.stock = p.stock;
@@ -215,11 +243,15 @@ function addLine(productId = null, qty = '', cost = null) {
         discountInput.value = p.discount ?? 0;
         maxDiscountInput.value = p.max_discount ?? 0;
         resultsBox.classList.add('hidden');
+        highlightedIndex = -1;
+        currentResults = [];
         recalc();
     }
 
     function renderResults(list) {
         if (list === null) return; // stale response, ignore
+        currentResults = list || [];
+        highlightedIndex = -1;
         if (!list.length) {
             resultsBox.innerHTML = `<div class="p-2 text-gray-400 text-sm">No matching products.</div>`;
         } else {
@@ -254,6 +286,42 @@ function addLine(productId = null, qty = '', cost = null) {
         }
     });
 
+    // Lets a product line be filled out without ever touching the mouse:
+    // type to search, Arrow Up/Down to move through the dropdown, Enter (or
+    // Tab) to pick the highlighted result and jump straight to Quantity.
+    searchInput.addEventListener('keydown', (e) => {
+        const dropdownOpen = !resultsBox.classList.contains('hidden') && currentResults.length;
+        if (dropdownOpen) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                highlightResult(Math.min(highlightedIndex + 1, currentResults.length - 1));
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                highlightResult(Math.max(highlightedIndex - 1, 0));
+                return;
+            }
+            if (e.key === 'Escape') {
+                resultsBox.classList.add('hidden');
+                highlightedIndex = -1;
+                return;
+            }
+            if (e.key === 'Enter' || (e.key === 'Tab' && !e.shiftKey)) {
+                e.preventDefault();
+                const pick = highlightedIndex >= 0 ? currentResults[highlightedIndex] : currentResults[0];
+                if (pick) selectProduct(pick);
+                focusAndSelect(qtyInput);
+                return;
+            }
+        } else if (e.key === 'Enter') {
+            // No dropdown showing (product already picked) — Enter still
+            // advances to Quantity, same as Tab already does natively.
+            e.preventDefault();
+            focusAndSelect(qtyInput);
+        }
+    });
+
     tr.querySelector('.po-qty').addEventListener('input', recalc);
     tr.querySelector('.po-cost').addEventListener('input', recalc);
     tr.querySelector('.po-discount').addEventListener('input', recalc);
@@ -263,7 +331,32 @@ function addLine(productId = null, qty = '', cost = null) {
         tr.remove();
         recalc();
     });
+
+    // Enter moves Qty → Cost → Discount → Max Discount, same as Tab. From
+    // the last field, Enter or Tab adds a fresh row instead of leaving the
+    // line — the "add another product" step never needs the mouse either.
+    qtyInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); focusAndSelect(costInput); }
+    });
+    costInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); focusAndSelect(discountInput); }
+    });
+    discountInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); focusAndSelect(maxDiscountInput); }
+    });
+    maxDiscountInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || (e.key === 'Tab' && !e.shiftKey)) {
+            e.preventDefault();
+            addLine(null, '', null, true);
+        }
+    });
+
     recalc();
+
+    // Land the cursor straight in the new (top) row's product search box —
+    // used both for the "+ Add another product" button and for the
+    // keyboard-driven "finish last field → new row" flow above.
+    if (focusSearch) searchInput.focus();
 }
 
 function recalc() {
@@ -293,7 +386,7 @@ function recalc() {
     document.getElementById('po-total').textContent = total.toFixed(2);
 }
 
-document.getElementById('add-line').addEventListener('click', () => addLine());
+document.getElementById('add-line').addEventListener('click', () => addLine(null, '', null, true));
 document.getElementById('po-overall-discount').addEventListener('input', recalc);
 
 /** Builds the hidden #po-print-area from the current (unsaved) form state
@@ -337,7 +430,11 @@ document.getElementById('po-print-btn').addEventListener('click', function () {
 });
 
 if (PRESELECTED_LINES.length) {
-    PRESELECTED_LINES.forEach(line => addLine(line.product_id, line.qty, null));
+    // Each addLine() call now prepends to the top, so iterate the preset
+    // list in reverse — that way the FIRST preselected line still ends up
+    // as the TOP row, preserving the original order the alert generated
+    // them in rather than flipping it.
+    [...PRESELECTED_LINES].reverse().forEach(line => addLine(line.product_id, line.qty, null));
 } else {
     addLine(); // one blank starter row
 }

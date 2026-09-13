@@ -30,13 +30,18 @@ class BackupController extends Controller
         'stock_movements',
         'customer_payments',
         'stock_returns',
+        'expenses',
+        'cash_parties',
+        'cash_transactions',
     ];
 
     /** Reference/master data — always exported in full, even for a
      *  date-range backup, since the transactional rows in that range point
      *  back to these records (a purchase order needs its supplier to exist,
-     *  an order needs its customer/cashier, etc). */
-    private const MASTER_TABLES = ['users', 'products', 'customers', 'suppliers'];
+     *  an order needs its customer/cashier, etc). cash_parties is the same
+     *  situation for cash_transactions as customers/suppliers are for
+     *  orders/purchase orders. */
+    private const MASTER_TABLES = ['users', 'products', 'customers', 'suppliers', 'cash_parties'];
 
     public function index()
     {
@@ -106,6 +111,13 @@ class BackupController extends Controller
                 'purchase_order_id',
                 DB::table('purchase_orders')->whereBetween('created_at', [$from, $to])->pluck('id')
             ),
+            // These two have their own business date, separate from
+            // created_at (an expense/cash entry can be logged today for an
+            // earlier date) — scope by that instead, same reasoning as
+            // orders/purchase orders using created_at being the wrong
+            // column for line items above.
+            'expenses' => DB::table('expenses')->whereBetween('expense_date', [$from, $to]),
+            'cash_transactions' => DB::table('cash_transactions')->whereBetween('transaction_date', [$from, $to]),
             default => DB::table($table)->whereBetween('created_at', [$from, $to]),
         };
 
@@ -189,7 +201,8 @@ class BackupController extends Controller
 
     /** Danger zone: wipes every managed table completely — products,
      *  customers, suppliers, orders, purchase orders, stock movements,
-     *  payments, stock returns, and users. Requires the "RESET" typed
+     *  payments, stock returns, expenses, cash management, and users.
+     *  Requires the "RESET" typed
      *  confirmation on the form on top of the usual are-you-sure dialog,
      *  since this cannot be undone from within the app (only by restoring
      *  a backup taken beforehand).

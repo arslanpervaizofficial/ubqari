@@ -2,8 +2,10 @@
 
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\BackupController;
+use App\Http\Controllers\CashManagementController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\ExpenseController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\POSController;
 use App\Http\Controllers\ProductController;
@@ -82,6 +84,9 @@ Route::middleware('auth')->group(function () {
         Route::post('suppliers/{supplier}/toggle-active', [SupplierController::class, 'toggleActive'])->name('suppliers.toggle-active');
 
         Route::resource('purchase-orders', PurchaseOrderController::class)->except(['show', 'edit', 'update', 'destroy']);
+        Route::get('purchase-orders/{purchaseOrder}', [PurchaseOrderController::class, 'show'])->name('purchase-orders.show');
+        Route::patch('purchase-orders/{purchaseOrder}/items/{item}', [PurchaseOrderController::class, 'updateItem'])->name('purchase-orders.update-item');
+        Route::patch('purchase-orders/{purchaseOrder}/discount', [PurchaseOrderController::class, 'updateDiscount'])->name('purchase-orders.update-discount');
         Route::get('purchase-orders/{purchaseOrder}/receive', [PurchaseOrderController::class, 'receiveForm'])->name('purchase-orders.receive-form');
         Route::post('purchase-orders/{purchaseOrder}/receive', [PurchaseOrderController::class, 'receive'])->name('purchase-orders.receive');
         Route::get('products-ajax-search', [ProductController::class, 'ajaxSearch'])->name('products.ajax-search');
@@ -89,6 +94,8 @@ Route::middleware('auth')->group(function () {
         // Sales-order history: search/filter, edit (loads into POS billing).
         Route::get('orders', [OrderController::class, 'index'])->name('orders.index');
         Route::post('orders/{order}/edit', [OrderController::class, 'edit'])->name('orders.edit');
+        Route::get('orders/{order}/ledger', [OrderController::class, 'ledger'])->name('orders.ledger');
+        Route::post('orders/{order}/payment', [OrderController::class, 'recordPayment'])->name('orders.record-payment');
 
         Route::get('stock-returns', [StockReturnController::class, 'index'])->name('stock-returns.index');
         Route::get('stock-returns/customer', [StockReturnController::class, 'customerForm'])->name('stock-returns.customer-form');
@@ -102,9 +109,19 @@ Route::middleware('auth')->group(function () {
         Route::get('reports/cash-reconciliation', [ReportController::class, 'cashReconciliation'])->name('reports.cash-reconciliation');
         Route::get('reports/stock', [ReportController::class, 'stock'])->name('reports.stock');
         Route::get('reports/purchases', [ReportController::class, 'purchases'])->name('reports.purchases');
+        Route::get('reports/capital', [ReportController::class, 'capital'])->name('reports.capital');
         Route::get('reports/customers', [ReportController::class, 'customers'])->name('reports.customers');
         Route::get('reports/customers/walk-in', [ReportController::class, 'walkInDetail'])->name('reports.walk-in-detail');
         Route::get('reports/customers/{customer}', [ReportController::class, 'customerDetail'])->name('reports.customer-detail');
+
+        Route::get('expenses', [ExpenseController::class, 'index'])->name('expenses.index');
+        Route::post('expenses', [ExpenseController::class, 'store'])->name('expenses.store');
+
+        Route::get('cash-management', [CashManagementController::class, 'index'])->name('cash-management.index');
+        Route::post('cash-management', [CashManagementController::class, 'storeParty'])->name('cash-management.store-party');
+        Route::post('cash-management/quick-add', [CashManagementController::class, 'quickAddLiability'])->name('cash-management.quick-add');
+        Route::get('cash-management/{cashParty}', [CashManagementController::class, 'show'])->name('cash-management.show');
+        Route::post('cash-management/{cashParty}/transactions', [CashManagementController::class, 'storeTransaction'])->name('cash-management.store-transaction');
 
         // Trash — view and Restore only. Permanently deleting from Trash is
         // an admin-only action (see the group below).
@@ -150,6 +167,12 @@ Route::middleware('auth')->group(function () {
 
         Route::delete('trash/{type}', [TrashController::class, 'forceDelete'])->name('trash.force-delete');
         Route::delete('trash/{type}/all', [TrashController::class, 'forceDeleteAll'])->name('trash.force-delete-all');
+
+        Route::delete('expenses/{expense}', [ExpenseController::class, 'destroy'])->name('expenses.destroy');
+        Route::post('expenses/destroy-selected', [ExpenseController::class, 'destroySelected'])->name('expenses.destroy-selected');
+
+        Route::delete('cash-management/{cashParty}', [CashManagementController::class, 'destroyParty'])->name('cash-management.destroy-party');
+        Route::delete('cash-management/{cashParty}/transactions/{transaction}', [CashManagementController::class, 'destroyTransaction'])->name('cash-management.destroy-transaction');
 
         Route::resource('users', UserController::class)->except(['show']);
         Route::post('users/{user}/toggle-active', [UserController::class, 'toggleActive'])->name('users.toggle-active');

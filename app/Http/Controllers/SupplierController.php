@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Supplier;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class SupplierController extends Controller
 {
@@ -31,12 +32,16 @@ class SupplierController extends Controller
         return view('suppliers.create');
     }
 
+    /** $id excludes the record being edited from the email uniqueness
+     *  check — same pattern as ProductController's sku/barcode and
+     *  UserController's username/email — so updating a supplier without
+     *  changing their own email doesn't flag itself as a duplicate. */
     private function rules($id = null): array
     {
         return [
             'name' => ['required', 'string', 'max:255'],
             'phone' => ['required', 'string', 'regex:/^[0-9+\-\s]{7,15}$/'],
-            'email' => ['nullable', 'email'],
+            'email' => ['nullable', 'email', Rule::unique('suppliers', 'email')->ignore($id)],
             'address' => ['nullable', 'string'],
             'id_card_number' => ['nullable', 'string', 'regex:/^\d{5}-\d{7}-\d{1}$/'],
             'current_address' => ['nullable', 'string'],

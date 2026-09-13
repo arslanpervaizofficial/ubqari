@@ -39,6 +39,13 @@
         <div class="font-semibold text-gray-800">Returns Report</div>
         <div class="text-xs text-gray-500 mt-1">All customer & supplier returns</div>
     </a>
+    <a href="{{ route('reports.capital') }}" class="bg-white rounded-xl shadow-sm p-5 hover:shadow-md transition">
+        <div class="w-9 h-9 rounded-lg bg-teal-100 text-teal-700 flex items-center justify-center mb-2">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .672-3 1.5S10.343 11 12 11s3 .672 3 1.5-1.343 1.5-3 1.5m0-6c1.11 0 2.08.402 2.599 1M12 8V6.5M12 15.5V17m0-9C8.686 8 6 9.79 6 12s2.686 4 6 4 6-1.79 6-4-2.686-4-6-4z"/></svg>
+        </div>
+        <div class="font-semibold text-gray-800">Total Capital</div>
+        <div class="text-xs text-gray-500 mt-1">Business cash In vs Out (Expenses)</div>
+    </a>
 </div>
 
 <form method="GET" data-ajax-filter="sales-summary" class="flex gap-2 mb-6">

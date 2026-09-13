@@ -3,7 +3,10 @@
 @section('content')
 <div class="flex justify-between items-center mb-4">
     <h1 class="text-2xl font-bold">Walk-in Customers — Report</h1>
-    <a href="{{ route('reports.customers') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back</a>
+    <div class="flex gap-2">
+        @include('reports._export_pdf')
+        <a href="{{ route('reports.customers') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back</a>
+    </div>
 </div>
 <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
     <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">Total Purchased</div><div class="text-2xl font-bold">{{ number_format($totalPurchased,2) }}</div></div>
@@ -38,7 +41,7 @@
 <table class="w-full text-sm">
     <thead class="bg-gray-50 text-left"><tr>
         {{-- <th class="p-3"><input type="checkbox" data-bulk-select-all="walk-in-orders"></th> --}}
-        <th class="p-3">Order #</th><th class="p-3">Date</th><th class="p-3">Items</th><th class="p-3">Total</th><th class="p-3">Status</th>
+        <th class="p-3">Order #</th><th class="p-3">Date</th><th class="p-3">Items</th><th class="p-3">Total</th><th class="p-3">Status</th><th class="p-3">Ledger</th>
         {{-- <th class="p-3">Actions</th> --}}
     </tr></thead>
     <tbody>
@@ -60,6 +63,11 @@
                     {{ ucfirst($o->status) }}
                 @endif
             </td>
+            <td class="p-3">
+                @if($o->status === 'completed')
+                    <a href="{{ route('orders.ledger', $o) }}" class="btn btn-gray {{ $o->due_amount > 0 ? '' : 'opacity-70' }}">{{ $o->due_amount > 0 ? 'Record Payment' : 'Ledger' }}</a>
+                @endif
+            </td>
             {{--
             <td class="p-3">
                 <form method="POST" action="{{ route('orders.destroy', $o) }}" class="inline confirm-submit" data-confirm-message="Move order {{ $o->order_number }} to Trash? Stock will be recounted automatically.">
@@ -69,7 +77,7 @@
             --}}
         </tr>
     @empty
-        <tr><td class="p-3 text-gray-400" colspan="5">No walk-in orders yet.</td></tr>
+        <tr><td class="p-3 text-gray-400" colspan="6">No walk-in orders yet.</td></tr>
     @endforelse
     </tbody>
 </table>

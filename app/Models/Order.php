@@ -22,6 +22,7 @@ class Order extends Model
     public function items() { return $this->hasMany(OrderItem::class); }
     public function customer() { return $this->belongsTo(Customer::class); }
     public function cashier() { return $this->belongsTo(User::class, 'user_id'); }
+    public function payments() { return $this->hasMany(OrderPayment::class); }
 
     /** Cleans up "in_progress" orders left behind when a cashier opens the
      *  POS screen (which immediately creates an order row so items can be

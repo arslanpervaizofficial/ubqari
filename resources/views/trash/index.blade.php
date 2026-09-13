@@ -68,6 +68,9 @@
                         @elseif($slug === 'stock-returns')
                             <span class="font-medium">{{ $item->type === 'from_customer' ? 'From' : 'To' }} {{ $item->type === 'from_customer' ? ($item->customer->name ?? 'Walk-in') : ($item->supplier->name ?? '—') }}</span>
                             <span class="text-gray-400">{{ $item->product->name ?? '—' }} × {{ $item->quantity }} — {{ number_format($item->quantity * $item->unit_price, 2) }}</span>
+                        @elseif($slug === 'expenses')
+                            <span class="font-medium">{{ $item->type === 'cash_in' ? 'Cash In' : 'Cash Out' }}{{ $item->category ? ' — '.$item->category : '' }}</span>
+                            <span class="text-gray-400">{{ $item->expense_date->format('Y-m-d') }} — {{ number_format($item->amount, 2) }}</span>
                         @endif
                     </td>
                     <td class="p-3 text-gray-500">{{ $item->deleted_at->format('Y-m-d H:i') }}</td>

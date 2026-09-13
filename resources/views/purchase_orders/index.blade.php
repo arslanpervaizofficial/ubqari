@@ -40,6 +40,8 @@
             <td class="p-3 space-x-1 whitespace-nowrap">
                 @if($po->status === 'pending')
                 <a href="{{ route('purchase-orders.receive-form', $po) }}" class="btn btn-green !bg-green-600 !text-white">Mark Received</a>
+                @else
+                <a href="{{ route('purchase-orders.show', $po) }}" class="btn btn-gray">View / Edit</a>
                 @endif
                 @if(auth()->user()->role === 'admin')
                 <form method="POST" action="{{ route('purchase-orders.destroy', $po) }}" class="inline confirm-submit" data-confirm-message="Move PO #{{ $po->id }} to Trash? This doesn't change current stock levels — it only removes the order record.">

@@ -21,14 +21,33 @@ class PurchaseOrder extends Model
      *  way deleting a Sales Order does: the record moves to Trash AND the
      *  stock/history effect it had goes with it, rather than leaving stock
      *  permanently inflated by a purchase nobody can see a record of any
-     *  more. Caller wraps this in a DB transaction. */
+     *  more. Caller wraps this in a DB transaction.
+     *
+     *  Guarded against going negative: current `stock` is a single running
+     *  number, not tracked per-batch, so if a sale has already gone out
+     *  against the stock this PO brought in, blindly subtracting the
+     *  received quantity here would drive stock negative with no record of
+     *  why — exactly the "order was placed, then the PO it came from just
+     *  vanished, so where did that quantity go?" problem. Refuse instead;
+     *  the PO stays in place until stock is adjusted (e.g. via a return)
+     *  so there's actually enough left to reverse. */
     public function reverseReceivedEffects(): void
     {
         if ($this->status !== 'received') {
             return;
         }
 
-        foreach ($this->items()->with('product')->get() as $item) {
+        $items = $this->items()->with('product')->get();
+
+        foreach ($items as $item) {
+            if ($item->received_quantity > 0 && $item->product && $item->product->stock < $item->received_quantity) {
+                throw new \RuntimeException(
+                    "Can't delete PO #{$this->id}: \"{$item->product->name}\" only has {$item->product->stock} in stock, but this PO brought in {$item->received_quantity} — some of it has already been sold. Reduce stock consumption (e.g. a return) before deleting this PO."
+                );
+            }
+        }
+
+        foreach ($items as $item) {
             if ($item->received_quantity > 0) {
                 $item->product->decrement('stock', $item->received_quantity);
             }

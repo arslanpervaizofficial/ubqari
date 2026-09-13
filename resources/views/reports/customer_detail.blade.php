@@ -4,8 +4,9 @@
 <div class="flex justify-between items-center mb-4">
     <h1 class="text-2xl font-bold">{{ $customer->name }} — Report</h1>
     <div class="flex gap-2">
-        <a href="{{ route('customers.ledger', $customer) }}" class="btn btn-solid-green">Record Payment / Ledger</a>
-        <a href="{{ route('reports.customers') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back</a>
+        @include('reports._export_pdf')
+        <a href="{{ route('customers.ledger', $customer) }}" class="btn btn-solid-green print:hidden">Record Payment / Ledger</a>
+        <a href="{{ route('reports.customers') }}" class="btn btn-gray print:hidden"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back</a>
     </div>
 </div>
 <div class="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-4">

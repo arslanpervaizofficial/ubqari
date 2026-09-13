@@ -3,9 +3,12 @@
 @section('content')
 <div class="flex justify-between items-center mb-4">
     <h1 class="text-2xl font-bold">Purchase Report</h1>
-    <a href="{{ route('reports.index') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back to Reports</a>
+    <div class="flex gap-2">
+        @include('reports._export_pdf')
+        <a href="{{ route('reports.index') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back to Reports</a>
+    </div>
 </div>
-<form method="GET" data-ajax-filter="purchases" class="flex gap-2 mb-4">
+<form method="GET" data-ajax-filter="purchases" class="flex gap-2 mb-4 print:hidden">
     <input type="date" name="from" value="{{ $from }}" class="border rounded px-3 py-2">
     <input type="date" name="to" value="{{ $to }}" class="border rounded px-3 py-2">
     <button class="btn btn-gray">Filter</button>

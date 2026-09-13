@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Customer;
+use App\Models\Expense;
 use App\Models\Order;
 use App\Models\PurchaseOrder;
 use App\Models\StockReturn;
@@ -27,6 +28,7 @@ class TrashController extends Controller
         'orders' => ['model' => Order::class, 'label' => 'Sales Orders', 'roles' => ['admin', 'manager']],
         'purchase-orders' => ['model' => PurchaseOrder::class, 'label' => 'Purchase Orders', 'roles' => ['admin', 'manager']],
         'stock-returns' => ['model' => StockReturn::class, 'label' => 'Stock Returns', 'roles' => ['admin', 'manager']],
+        'expenses' => ['model' => Expense::class, 'label' => 'Expenses', 'roles' => ['admin', 'manager']],
         'users' => ['model' => User::class, 'label' => 'Users', 'roles' => ['admin']],
     ];
 

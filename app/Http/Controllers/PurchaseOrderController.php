@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Product;
 use App\Models\PurchaseOrder;
+use App\Models\PurchaseOrderItem;
 use App\Models\StockMovement;
 use App\Models\Supplier;
 use Illuminate\Http\Request;
@@ -24,27 +25,30 @@ class PurchaseOrderController extends Controller
      *  nothing to reverse for those. */
     public function destroy(PurchaseOrder $purchaseOrder)
     {
-        DB::transaction(function () use ($purchaseOrder) {
-            $purchaseOrder->reverseReceivedEffects();
-            $purchaseOrder->delete();
-        });
+        try {
+            DB::transaction(function () use ($purchaseOrder) {
+                $purchaseOrder->reverseReceivedEffects();
+                $purchaseOrder->delete();
+            });
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['purchase_order' => $e->getMessage()]);
+        }
+
         return back()->with('status', "PO #{$purchaseOrder->id} moved to Trash — stock adjusted.");
     }
 
-    /** Bulk version of destroy() for the checked rows on the PO list. */
+    /** Bulk version of destroy() for the checked rows on the PO list. Each
+     *  PO is reversed+deleted in its own transaction so one that can't be
+     *  safely reversed (see PurchaseOrder::reverseReceivedEffects) is
+     *  skipped without blocking the rest of the batch. */
     public function destroySelected(Request $request)
     {
         $ids = (array) $request->input('ids', []);
         $purchaseOrders = PurchaseOrder::whereIn('id', $ids)->get();
 
-        DB::transaction(function () use ($purchaseOrders) {
-            foreach ($purchaseOrders as $purchaseOrder) {
-                $purchaseOrder->reverseReceivedEffects();
-                $purchaseOrder->delete();
-            }
-        });
+        [$deleted, $skipped] = $this->deleteEach($purchaseOrders);
 
-        return back()->with('status', count($purchaseOrders) . ' purchase order(s) moved to Trash — stock adjusted.');
+        return back()->with('status', $this->deleteSummary($deleted, $skipped));
     }
 
     /** Bulk version of destroy() for every purchase order currently listed
@@ -53,14 +57,39 @@ class PurchaseOrderController extends Controller
     {
         $purchaseOrders = PurchaseOrder::all();
 
-        DB::transaction(function () use ($purchaseOrders) {
-            foreach ($purchaseOrders as $purchaseOrder) {
-                $purchaseOrder->reverseReceivedEffects();
-                $purchaseOrder->delete();
-            }
-        });
+        [$deleted, $skipped] = $this->deleteEach($purchaseOrders);
 
-        return back()->with('status', count($purchaseOrders) . ' purchase order(s) moved to Trash — stock adjusted.');
+        return back()->with('status', $this->deleteSummary($deleted, $skipped));
+    }
+
+    /** Shared loop for the two bulk-delete actions above. */
+    private function deleteEach($purchaseOrders): array
+    {
+        $deleted = 0;
+        $skipped = [];
+
+        foreach ($purchaseOrders as $purchaseOrder) {
+            try {
+                DB::transaction(function () use ($purchaseOrder) {
+                    $purchaseOrder->reverseReceivedEffects();
+                    $purchaseOrder->delete();
+                });
+                $deleted++;
+            } catch (\RuntimeException $e) {
+                $skipped[] = "PO #{$purchaseOrder->id}";
+            }
+        }
+
+        return [$deleted, $skipped];
+    }
+
+    private function deleteSummary(int $deleted, array $skipped): string
+    {
+        $status = "{$deleted} purchase order(s) moved to Trash — stock adjusted.";
+        if ($skipped) {
+            $status .= ' Skipped (stock from these already sold, can\'t reverse safely): ' . implode(', ', $skipped) . '.';
+        }
+        return $status;
     }
 
     public function create(Request $request)
@@ -199,8 +228,17 @@ class PurchaseOrderController extends Controller
 
                 if ($receivedQty > 0) {
                     $item->product->increment('stock', $receivedQty);
-                    // keep purchase_price up to date with the latest NET cost (after this line's discount)
-                    $item->product->update(['purchase_price' => $item->net_cost_price]);
+                    // Keep the product's Purchase Price / Purchase Discount %
+                    // in sync with this PO line's own GROSS cost and discount
+                    // — not the net figure. purchase_price must stay the raw
+                    // supplier rate everywhere (Products form, Excel import,
+                    // and here) so there's one consistent meaning for it;
+                    // anything that needs the actual cost after discount
+                    // should read Product::net_purchase_price instead.
+                    $item->product->update([
+                        'purchase_price' => $item->cost_price,
+                        'purchase_discount_percent' => $item->discount_percent,
+                    ]);
 
                     StockMovement::create([
                         'product_id' => $item->product_id,
@@ -218,5 +256,139 @@ class PurchaseOrderController extends Controller
         });
 
         return redirect()->route('purchase-orders.index')->with('status', 'PO marked received — stock updated with actual received quantities.');
+    }
+
+    /** Read-only-looking but click-to-edit view of a received PO. Only
+     *  three things are ever editable here — Received Qty ("stock" that
+     *  came in), each line's own Discount % ("supplier discount"), and the
+     *  PO's overall Discount % (the blanket discount, separate from any one
+     *  line's own) — never cost_price or which products are on the order,
+     *  since those aren't corrections so much as a different purchase
+     *  entirely. Pending (not yet received) POs use the existing
+     *  create/receive flow instead; this is purely for fixing a mistake
+     *  noticed after the fact on one already marked received. */
+    public function show(PurchaseOrder $purchaseOrder)
+    {
+        abort_unless($purchaseOrder->status === 'received', 404);
+        $purchaseOrder->load('items.product', 'supplier');
+        // Realigns subtotal/total with what was actually received — at
+        // store() time these were computed off the ORDERED quantities, so
+        // a PO with a short/over-shipment could otherwise show line totals
+        // here that don't sum to the PO's own stored subtotal until the
+        // first edit is made. Recalculating on every view keeps it
+        // consistent from the very first look, not just after a correction.
+        $this->recalculateTotals($purchaseOrder);
+        return view('purchase_orders.show', compact('purchaseOrder'));
+    }
+
+    /** Corrects one line item after the PO was already received — either
+     *  the actual received quantity or that line's own discount. Whichever
+     *  one changes, stock and the PO's totals are kept in sync: a changed
+     *  quantity adjusts the product's stock by the DELTA (not a blind
+     *  re-set, so it composes correctly with anything else that's touched
+     *  stock since), and either change recomputes the PO's subtotal/total
+     *  from scratch off every line's current numbers. */
+    public function updateItem(Request $request, PurchaseOrder $purchaseOrder, PurchaseOrderItem $item)
+    {
+        abort_unless($purchaseOrder->status === 'received', 404);
+        abort_unless($item->purchase_order_id === $purchaseOrder->id, 404);
+
+        $data = $request->validate([
+            'received_quantity' => ['nullable', 'numeric', 'min:0'],
+            'discount_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
+        ]);
+
+        DB::transaction(function () use ($item, $data) {
+            if (array_key_exists('received_quantity', $data) && $data['received_quantity'] !== null) {
+                $oldQty = $item->received_quantity;
+                $newQty = $data['received_quantity'];
+                $delta = $newQty - $oldQty;
+
+                if ($delta !== 0.0) {
+                    $item->product()->increment('stock', $delta);
+                    StockMovement::create([
+                        'product_id' => $item->product_id,
+                        'type' => 'purchase',
+                        'quantity' => $delta,
+                        'reason' => "PO #{$item->purchase_order_id} received quantity corrected ({$oldQty} → {$newQty})",
+                        'user_id' => auth()->id(),
+                        'purchase_order_id' => $item->purchase_order_id,
+                    ]);
+                }
+
+                $item->update(['received_quantity' => $newQty]);
+            }
+
+            if (array_key_exists('discount_percent', $data) && $data['discount_percent'] !== null) {
+                $item->update(['discount_percent' => $data['discount_percent']]);
+            }
+
+            // Keep the product's cost reference (gross Purchase Price +
+            // Purchase Discount %) in sync with this line's current
+            // numbers, same as receive() does originally.
+            $item->product->update([
+                'purchase_price' => $item->fresh()->cost_price,
+                'purchase_discount_percent' => $item->fresh()->discount_percent,
+            ]);
+        });
+
+        $item->refresh();
+        $purchaseOrder->refresh();
+        $this->recalculateTotals($purchaseOrder);
+
+        return response()->json([
+            'received_quantity' => $item->received_quantity,
+            'discount_percent' => $item->discount_percent,
+            // Deliberately received_quantity × net cost, not the
+            // quantity-ordered-based line_total accessor (that one's used
+            // elsewhere — e.g. the supplier-return discount lookup — where
+            // a per-unit ratio independent of how much actually arrived is
+            // what's wanted). This correction screen exists specifically
+            // to reconcile the total with what was ACTUALLY received.
+            'line_total' => round($item->received_quantity * $item->net_cost_price, 2),
+            'product_stock' => $item->product->fresh()->stock,
+            'po' => [
+                'subtotal' => $purchaseOrder->subtotal,
+                'discount_amount' => $purchaseOrder->discount_amount,
+                'total' => $purchaseOrder->total,
+            ],
+        ]);
+    }
+
+    /** The PO's own overall Discount % — a blanket discount applied once
+     *  across every line's already-net subtotal, separate from and on top
+     *  of each line's individual discount. */
+    public function updateDiscount(Request $request, PurchaseOrder $purchaseOrder)
+    {
+        abort_unless($purchaseOrder->status === 'received', 404);
+
+        $data = $request->validate([
+            'discount_percent' => ['required', 'numeric', 'min:0', 'max:100'],
+        ]);
+
+        $purchaseOrder->update(['discount_percent' => $data['discount_percent']]);
+        $this->recalculateTotals($purchaseOrder);
+
+        return response()->json([
+            'discount_percent' => $purchaseOrder->discount_percent,
+            'subtotal' => $purchaseOrder->subtotal,
+            'discount_amount' => $purchaseOrder->discount_amount,
+            'total' => $purchaseOrder->total,
+        ]);
+    }
+
+    /** Recomputes subtotal/discount_amount/total from every line's current
+     *  RECEIVED quantity (not ordered) × its net cost — this correction
+     *  screen exists to reconcile the PO's total with what actually came
+     *  in, same reasoning as updateItem()'s line_total above. */
+    private function recalculateTotals(PurchaseOrder $purchaseOrder): void
+    {
+        $subtotal = $purchaseOrder->items->sum(fn ($item) => $item->received_quantity * $item->net_cost_price);
+        $discountAmount = round($subtotal * ($purchaseOrder->discount_percent / 100), 2);
+        $purchaseOrder->update([
+            'subtotal' => round($subtotal, 2),
+            'discount_amount' => $discountAmount,
+            'total' => round($subtotal - $discountAmount, 2),
+        ]);
     }
 }

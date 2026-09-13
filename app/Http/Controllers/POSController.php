@@ -183,12 +183,31 @@ class POSController extends Controller
         $qty = $product->roundQuantity((float) $data['quantity']);
         if ($qty <= 0) $qty = $product->roundQuantity(1);
 
+        $existing = $order->items()->where('product_id', $product->id)->first();
+
+        // Room left beyond everything already reserved (including this
+        // item's own current quantity in this cart, if any) — see
+        // availableStock() docblock. This is how much MORE can be added.
         $available = $this->availableStock($product);
+        $warning = null;
+
         if ($qty > $available) {
-            return response()->json(['error' => "Only {$available} {$product->unit} available."], 422);
+            if ($available <= 0 && !$existing) {
+                // Genuinely nothing to add — this is the one case still
+                // blocked outright, since there's no sensible partial
+                // quantity to fall back to.
+                return response()->json(['error' => "{$product->name} is out of stock."], 422);
+            }
+
+            // Non-blocking: clamp to whatever's actually available and tell
+            // the cashier, rather than rejecting the request. Blocking here
+            // meant the warning only ever surfaced once (via the one-off
+            // error alert) instead of every time the limit is hit again.
+            $cappedTotal = ($existing->quantity ?? 0) + max(0, $available);
+            $warning = "{$product->name}: only {$cappedTotal} {$product->unit} available in total. Quantity adjusted.";
+            $qty = max(0, $product->roundQuantity($available));
         }
 
-        $existing = $order->items()->where('product_id', $product->id)->first();
         if ($existing) {
             $newQty = $product->roundQuantity($existing->quantity + $qty);
             $existing->quantity = $newQty;
@@ -211,6 +230,7 @@ class POSController extends Controller
             'success' => true,
             'order' => $order->fresh('items.product'),
             'available_stock' => $this->availableStock($product),
+            'warning' => $warning,
         ]);
     }
 
@@ -231,9 +251,26 @@ class POSController extends Controller
         $qty = $product->roundQuantity((float) $data['quantity']);
         if ($qty <= 0) $qty = $product->roundQuantity(1);
 
+        // Total this item's quantity is allowed to reach: room left beyond
+        // everything reserved elsewhere, PLUS what this item already holds
+        // (since that's counted as "reserved" too and would otherwise be
+        // subtracted twice).
         $availableExcludingThis = $this->availableStock($product) + $item->quantity;
-        if ($qty > $availableExcludingThis) {
-            return response()->json(['error' => "Only {$availableExcludingThis} {$product->unit} available."], 422);
+
+        $warning = null;
+        if ($availableExcludingThis <= 0) {
+            // Stock got used up elsewhere since this line was added — can't
+            // increase it further, so leave it exactly as it is.
+            $warning = "{$product->name}: no additional stock available.";
+            $qty = $item->quantity;
+        } elseif ($qty > $availableExcludingThis) {
+            // Non-blocking: clamp to what's available and warn, instead of
+            // rejecting the request outright. A hard error here only ever
+            // surfaced once (as a one-off popup); clamping + warning fires
+            // every single time the limit is hit, which is what's needed
+            // for a cashier who keeps typing quantities above stock.
+            $warning = "Only {$availableExcludingThis} {$product->unit} of {$product->name} available. Quantity adjusted.";
+            $qty = $product->roundQuantity($availableExcludingThis);
         }
 
         $item->quantity = $qty;
@@ -242,7 +279,11 @@ class POSController extends Controller
 
         $this->recalculateTotals($item->order);
 
-        return response()->json(['success' => true, 'order' => $item->order->fresh('items.product')]);
+        return response()->json([
+            'success' => true,
+            'order' => $item->order->fresh('items.product'),
+            'warning' => $warning,
+        ]);
     }
 
     /** Per-item discount. Applying above the product's max_discount_percent is

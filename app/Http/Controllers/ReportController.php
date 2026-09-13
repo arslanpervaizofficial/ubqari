@@ -3,10 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Models\Customer;
+use App\Models\Expense;
+use App\Models\CashParty;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\PurchaseOrder;
+use App\Models\PurchaseOrderItem;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -97,7 +100,7 @@ class ReportController extends Controller
         }
 
         $products = $query->orderBy('name')->get();
-        $totalStockValue = $products->sum(fn ($p) => $p->stock * $p->purchase_price);
+        $totalStockValue = $products->sum(fn ($p) => $p->stock * $p->net_purchase_price);
         $outOfStockCount = Product::active()->where('stock', '<=', 0)->count();
         $availableCount = Product::active()->where('stock', '>', 0)->count();
 
@@ -182,5 +185,181 @@ class ReportController extends Controller
         $returns = \App\Models\StockReturn::where('customer_id', $customer->id)->with('product')->latest()->get();
 
         return view('reports.customer_detail', compact('customer', 'orders', 'totalPurchased', 'totalDue', 'returns'));
+    }
+
+    /** "Total Capital" report — read-only view of the same Investment vs
+     *  Expenses numbers the Expenses page tracks (see ExpenseController),
+     *  but framed as a report: a date-range view with a category breakdown
+     *  and the full entry list, no add-expense form. Managing entries still
+     *  happens on the Expenses page itself. */
+    public function capital(Request $request)
+    {
+        $from = $request->input('from') ?: now()->startOfMonth()->toDateString();
+        $to = $request->input('to') ?: now()->toDateString();
+        $year = (int) ($request->input('year') ?: now()->year);
+
+        // --- Current overall standing (all-time snapshot, not scoped to
+        // the date filter — see ExpenseController::index() for the same
+        // reasoning) ---
+        // Stock Value must use the NET cost per unit (purchase_price after
+        // purchase_discount_percent) — see Product::net_purchase_price —
+        // since purchase_price alone is the GROSS supplier rate.
+        $stockValue = (float) Product::query()->get()->sum(fn ($p) => $p->stock * $p->net_purchase_price);
+        $cashInjected = (float) Expense::where('type', 'cash_in')->sum('amount');
+
+        // Total Investment is a CONSTANT, historical figure: every rupee
+        // ever put into the business, whether as stock purchases or cash
+        // injections. It never moves when a product sells — that's the
+        // whole point of it (a running "how much have we invested so far"
+        // total). So it's built from the cumulative net cost of everything
+        // ever RECEIVED on a Purchase Order (not current stock — that
+        // shrinks with sales), plus cash injected — same
+        // received_quantity × net cost_price approach as the COGS query
+        // below.
+        $cumulativePurchaseCost = (float) PurchaseOrderItem::join('purchase_orders', 'purchase_order_items.purchase_order_id', '=', 'purchase_orders.id')
+            ->where('purchase_orders.status', 'received')
+            ->sum(DB::raw('purchase_order_items.received_quantity * purchase_order_items.cost_price * (1 - COALESCE(purchase_order_items.discount_percent, 0) / 100)'));
+        $totalInvestment = $cumulativePurchaseCost + $cashInjected;
+
+        // Remaining Investment is what's actually still tied up in the
+        // business right now: current stock value (this DOES shrink as
+        // products sell) plus cash injected (that doesn't get "spent" by a
+        // sale, so it stays in both figures).
+        $remainingInvestment = $stockValue + $cashInjected;
+        // Cash Out only — Cash In is a capital injection, not an expense
+        // (see ExpenseController::index for the same reasoning). Summing
+        // both used to overstate Total Expenses by whatever had been added
+        // as capital.
+        $totalExpenses = (float) Expense::where('type', 'cash_out')->sum('amount');
+        // Cash Management (personal borrowing tracker) was built deliberately
+        // isolated from the rest of the system, but "liabilities" is
+        // meaningless without it — money owed to people is a real liability
+        // against the business's capital, so it's pulled in here (read-only)
+        // for a complete picture. It's still managed entirely on its own
+        // Cash Management page; nothing here writes back to it.
+        $totalLiabilities = (float) CashParty::sum('balance');
+        // Net Capital is meant to reflect true current standing (equity),
+        // so it's Remaining Investment minus BOTH what's been spent AND
+        // what's owed to others — Liabilities used to only be displayed
+        // here, with no actual effect on this figure.
+        $netCapital = $remainingInvestment - $totalExpenses - $totalLiabilities;
+
+        // --- Standard Margin (Revenue − Cost of Goods Sold). The old
+        // "Profit & Loss" card (discount-differential formula) was removed
+        // per request — this is now the only profit figure on the report.
+        //
+        // Revenue is the ACTUAL amount each completed order settled for
+        // (orders.total), which already nets out both the per-item
+        // discount (order_items.discount_percent) and the customer-level
+        // discount (orders.discount_percent — e.g. a wholesale customer's
+        // standing discount vs a walk-in customer's 0%). Pulling it from
+        // products.sale_price instead (the CURRENT catalog price) used to
+        // silently assume every sale went out at full list price, which
+        // erased exactly the margin difference between a discounted
+        // wholesale sale and a full-price walk-in sale.
+        //
+        // COGS still comes from products.purchase_price rather than a
+        // per-sale snapshot, because that field (together with
+        // purchase_discount_percent — see Product::net_purchase_price) is
+        // kept as the CURRENT net cost after the supplier's discount is
+        // applied (see PurchaseOrderController@receive) — so the supplier
+        // discount is already baked in here. The one remaining
+        // approximation is that this uses the CURRENT purchase price for
+        // all historical sales (no historical cost snapshot per sale
+        // exists yet), so COGS shifts if a product's cost is edited after
+        // the sale. Nothing here is cached: it's a live query run fresh on
+        // every page load. ---
+        $totalRevenue = (float) Order::where('status', 'completed')->sum('total');
+        $approxCogs = (float) OrderItem::join('orders', 'order_items.order_id', '=', 'orders.id')
+            ->join('products', 'order_items.product_id', '=', 'products.id')
+            ->where('orders.status', 'completed')
+            ->sum(DB::raw('order_items.quantity * products.purchase_price * (1 - COALESCE(products.purchase_discount_percent, 0) / 100)'));
+        $approxGrossMargin = $totalRevenue - $approxCogs;
+        $approxNetProfit = $approxGrossMargin - $totalExpenses;
+
+        $monthly = $this->monthlyCapitalBreakdown($year);
+
+        // --- Period log (still date-filtered — this part is a browsable
+        // history, unlike the snapshot figures above) ---
+        $query = Expense::whereDate('expense_date', '>=', $from)->whereDate('expense_date', '<=', $to);
+
+        $byCategory = (clone $query)
+            ->selectRaw("COALESCE(category, 'Uncategorized') as category, type, SUM(amount) as total")
+            ->groupBy('category', 'type')
+            ->get()
+            ->groupBy('category')
+            ->map(fn ($rows) => [
+                'cash_in' => (float) $rows->firstWhere('type', 'cash_in')?->total,
+                'cash_out' => (float) $rows->firstWhere('type', 'cash_out')?->total,
+            ]);
+
+        $expenses = (clone $query)->with('user')->latest('expense_date')->latest('id')->get();
+
+        return view('reports.capital', compact(
+            'totalInvestment', 'cumulativePurchaseCost', 'remainingInvestment', 'totalExpenses', 'netCapital', 'stockValue', 'cashInjected', 'totalLiabilities',
+            'totalRevenue', 'approxCogs', 'approxGrossMargin', 'approxNetProfit',
+            'monthly', 'year', 'byCategory', 'expenses', 'from', 'to'
+        ));
+    }
+
+    /** One row per calendar month of the given year: that month's Cash In/
+     *  Cash Out, Standard-Margin revenue (each order's actual settled
+     *  `total`, discounts already netted out) / COGS (each item's
+     *  quantity at the product's CURRENT net purchase price — same
+     *  approach as the all-time figure above), and the net profit after
+     *  that month's expenses. Grouped in PHP after a single fetch per
+     *  source (rather than DB-specific date-grouping functions, which
+     *  differ between MySQL and SQLite) — fine at the scale a single
+     *  shop's yearly data runs to. */
+    private function monthlyCapitalBreakdown(int $year): array
+    {
+        $months = [];
+        foreach (range(1, 12) as $m) {
+            $months[$m] = [
+                'month' => $m,
+                'label' => \Carbon\Carbon::create($year, $m, 1)->format('M Y'),
+                'cash_in' => 0.0, 'cash_out' => 0.0,
+                'revenue' => 0.0, 'cogs' => 0.0,
+                'expenses' => 0.0, 'gross_margin' => 0.0, 'net_profit' => 0.0,
+            ];
+        }
+
+        Expense::whereYear('expense_date', $year)->get()->each(function ($e) use (&$months) {
+            $m = $e->expense_date->month;
+            if ($e->type === 'cash_in') {
+                $months[$m]['cash_in'] += (float) $e->amount;
+            } else {
+                $months[$m]['cash_out'] += (float) $e->amount;
+                // Cash In is a capital injection, not an expense — only
+                // Cash Out counts toward the month's expenses/net profit
+                // (see capital() above for the same reasoning).
+                $months[$m]['expenses'] += (float) $e->amount;
+            }
+        });
+
+        Order::where('status', 'completed')
+            ->whereYear(DB::raw('COALESCE(original_completed_at, created_at)'), $year)
+            ->with('items.product')
+            ->get()
+            ->each(function ($order) use (&$months) {
+                $m = ($order->original_completed_at ?? $order->created_at)->month;
+                // Revenue is the order's actual settled total, not
+                // quantity × current list price — see capital() above.
+                $months[$m]['revenue'] += (float) $order->total;
+                $order->items->each(function ($item) use (&$months, $m) {
+                    if (!$item->product) return;
+                    $months[$m]['cogs'] += $item->quantity * $item->product->net_purchase_price;
+                });
+            });
+
+        foreach ($months as $m => $row) {
+            $margin = $row['revenue'] - $row['cogs'];
+            $months[$m]['gross_margin'] = round($margin, 2);
+            $months[$m]['net_profit'] = round($margin - $row['expenses'], 2);
+            $months[$m]['revenue'] = round($row['revenue'], 2);
+            $months[$m]['cogs'] = round($row['cogs'], 2);
+        }
+
+        return array_values($months);
     }
 }

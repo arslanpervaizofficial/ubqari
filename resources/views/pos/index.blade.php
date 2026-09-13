@@ -158,7 +158,10 @@ function showWarning(msg) {
 function renderOrder(order) {
     const tbody = document.getElementById('cart-body');
     tbody.innerHTML = '';
-    order.items.forEach(item => {
+    // Newest item first (reversed), so whatever was just added/updated sits
+    // right at the top next to the product search box — no scrolling down
+    // to reach its Quantity/Discount fields as the cart grows.
+    [...order.items].reverse().forEach(item => {
         const unit = item.product.unit;
         const step = isIntegerUnit(unit) ? '1' : '0.01';
         const tr = document.createElement('tr');
@@ -184,78 +187,160 @@ function renderOrder(order) {
 renderOrder(@json($order));
 
 let searchTimeout;
+let highlightedIndex = -1;
+let currentResults = [];
+
+function highlightResult(index) {
+    const items = document.querySelectorAll('#search-results .search-result-item');
+    items.forEach(el => el.classList.remove('bg-blue-100'));
+    if (index >= 0 && index < items.length) {
+        items[index].classList.add('bg-blue-100');
+        items[index].scrollIntoView({ block: 'nearest' });
+    }
+    highlightedIndex = index;
+}
+
 document.getElementById('product-search').addEventListener('input', function (e) {
     clearTimeout(searchTimeout);
     const q = e.target.value.trim();
     const box = document.getElementById('search-results');
+    highlightedIndex = -1;
+    currentResults = [];
     if (!q) { box.classList.add('hidden'); return; }
     searchTimeout = setTimeout(async () => {
         try {
             const res = await fetch(`{{ route('pos.product-search') }}?q=${encodeURIComponent(q)}`, { headers: { 'Accept': 'application/json' } });
             const products = await res.json();
+            currentResults = products;
             box.innerHTML = '';
-            products.forEach(p => {
+            products.forEach((p, i) => {
                 const div = document.createElement('div');
-                div.className = 'p-2 hover:bg-gray-100 cursor-pointer flex justify-between text-sm';
+                div.className = 'search-result-item p-2 hover:bg-gray-100 cursor-pointer flex justify-between text-sm';
                 div.innerHTML = `<span>${p.name} (${p.sku})</span><span>${p.stock} ${p.unit} @ ${Number(p.sale_price).toFixed(2)}</span>`;
                 div.onclick = () => addProduct(p.id);
                 box.appendChild(div);
             });
             box.classList.remove('hidden');
+            highlightedIndex = -1;
         } catch (err) { console.error(err); }
     }, 250);
+});
+
+// Lets the whole "find a product" step happen without ever touching the
+// mouse: type to search, Arrow Up/Down to move through the suggestions,
+// Enter to pick the highlighted one. Selecting a product (this way or by
+// click) then moves focus straight to that row's Quantity field, since
+// that's virtually always the next thing typed.
+document.getElementById('product-search').addEventListener('keydown', function (e) {
+    const box = document.getElementById('search-results');
+    if (box.classList.contains('hidden') || !currentResults.length) return;
+
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        highlightResult(Math.min(highlightedIndex + 1, currentResults.length - 1));
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        highlightResult(Math.max(highlightedIndex - 1, 0));
+    } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const pick = highlightedIndex >= 0 ? currentResults[highlightedIndex] : currentResults[0];
+        if (pick) addProduct(pick.id);
+    } else if (e.key === 'Escape') {
+        box.classList.add('hidden');
+        highlightedIndex = -1;
+    }
 });
 
 async function addProduct(productId) {
     try {
         const data = await api('{{ route("pos.add-item") }}', 'POST', { product_id: productId, quantity: 1 });
         renderOrder(data.order);
+        showWarning(data.warning);
         document.getElementById('search-results').classList.add('hidden');
         document.getElementById('product-search').value = '';
-        document.getElementById('product-search').focus();
+        highlightedIndex = -1;
+        currentResults = [];
+
+        // Focus the Quantity field of whichever row this product ended up
+        // on — a brand new row if it wasn't in the cart yet, or the
+        // existing row (now with an incremented quantity) if it was.
+        const addedItem = data.order.items.find(i => i.product_id === productId);
+        const qtyInput = addedItem ? document.querySelector(`.qty-input[data-item-id="${addedItem.id}"]`) : null;
+        if (qtyInput) {
+            qtyInput.focus();
+            qtyInput.select();
+        } else {
+            document.getElementById('product-search').focus();
+        }
     } catch (err) { uiAlert(err.message, "⚠️"); }
 }
+
+// Enter acts like Tab within a cart row (Qty → Discount), and like
+// "confirm and start the next item" from Discount (→ back to product
+// search) — the full add-a-line workflow never needs the mouse.
+document.getElementById('cart-body').addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    const target = e.target;
+    if (target.classList.contains('qty-input')) {
+        e.preventDefault();
+        const discInput = target.closest('tr')?.querySelector('.disc-input');
+        if (discInput) { discInput.focus(); discInput.select(); }
+    } else if (target.classList.contains('disc-input')) {
+        e.preventDefault();
+        document.getElementById('product-search').focus();
+    }
+});
 
 document.getElementById('cart-body').addEventListener('change', async function (e) {
     const itemId = e.target.dataset.itemId;
     if (!itemId) return;
+    if (!e.target.classList.contains('qty-input') && !e.target.classList.contains('disc-input')) return;
 
-    // 'change' fires on blur — which, if the user pressed Tab, happens
-    // AFTER the browser already moved focus to the next field. renderOrder()
-    // then rebuilds the whole table from scratch (tbody.innerHTML = ''),
-    // destroying that freshly-focused element along with everything else,
-    // so the Tab press visibly "loses" focus every time. Capture what's
-    // focused right now and, once the new rows exist, refocus the matching
-    // one (same item + same field type) so Tabbing between fields feels
-    // normal instead of kicking focus out after every single field.
-    const activeEl = document.activeElement;
-    const activeClass = activeEl?.classList?.contains('qty-input') ? 'qty-input'
-        : activeEl?.classList?.contains('disc-input') ? 'disc-input' : null;
-    const activeItemId = activeEl?.dataset?.itemId;
-    const selectionStart = activeEl?.selectionStart ?? null;
-
-    function restoreFocus() {
-        if (!activeClass || !activeItemId) return;
-        const newEl = document.querySelector(`.${activeClass}[data-item-id="${activeItemId}"]`);
-        if (newEl) {
-            newEl.focus();
-            if (selectionStart !== null && typeof newEl.setSelectionRange === 'function') {
-                try { newEl.setSelectionRange(selectionStart, selectionStart); } catch (e) {}
-            }
-        }
-    }
+    // Previously this called renderOrder(data.order) here, which rebuilds
+    // every row from scratch — destroying whatever field currently had
+    // focus (e.g. the Discount box you just Tab'd/Entered into) the moment
+    // the line total finished recalculating, so it had to be "restored"
+    // afterwards. That restore was itself unreliable. The actual fix is to
+    // never destroy focus in the first place: update only the numbers that
+    // changed (this row's line total, the totals footer) and leave every
+    // <tr>/<input> exactly as it is, so focus simply never moves unless
+    // the person moves it themselves.
+    const tr = e.target.closest('tr');
+    const fieldBeingEdited = e.target;
 
     try {
+        let data;
         if (e.target.classList.contains('qty-input')) {
-            const data = await api(`/pos/item/${itemId}`, 'PATCH', { quantity: e.target.value });
-            renderOrder(data.order);
-            restoreFocus();
-        } else if (e.target.classList.contains('disc-input')) {
-            const data = await api(`/pos/item/${itemId}/discount`, 'PATCH', { discount_percent: e.target.value });
-            renderOrder(data.order);
-            showWarning(data.warning);
-            restoreFocus();
+            data = await api(`/pos/item/${itemId}`, 'PATCH', { quantity: e.target.value });
+        } else {
+            data = await api(`/pos/item/${itemId}/discount`, 'PATCH', { discount_percent: e.target.value });
         }
+        // Both quantity and discount responses can carry a warning (stock
+        // exceeded / max discount exceeded) — show it every time, not just
+        // for discount changes, and clear the banner when there isn't one.
+        showWarning(data.warning);
+
+        const updatedItem = data.order.items.find(i => i.id == itemId);
+        if (updatedItem && tr) {
+            const lineTotalCell = tr.querySelector('.line-total');
+            if (lineTotalCell) lineTotalCell.textContent = Number(updatedItem.line_total).toFixed(2);
+
+            // If the server clamped/rounded the value (e.g. quantity capped
+            // to available stock), reflect that — but only on the field
+            // that ISN'T currently focused, so we never fight the cursor
+            // of whichever field the person has already tabbed into next.
+            const qtyInput = tr.querySelector('.qty-input');
+            const discInput = tr.querySelector('.disc-input');
+            if (qtyInput && document.activeElement !== qtyInput) qtyInput.value = updatedItem.quantity;
+            if (discInput && document.activeElement !== discInput) discInput.value = updatedItem.discount_percent;
+        }
+
+        document.getElementById('subtotal').textContent = Number(data.order.subtotal).toFixed(2);
+        document.getElementById('line-discount').textContent = Number(data.order.line_discount_total).toFixed(2);
+        document.getElementById('discount').textContent = Number(data.order.discount_amount).toFixed(2);
+        document.getElementById('total').textContent = Number(data.order.total).toFixed(2);
+        const paidInput = document.querySelector('#checkout-modal input[name="paid_amount"]');
+        if (paidInput) paidInput.value = data.order.total;
     } catch (err) { uiAlert(err.message, "⚠️"); }
 });
 

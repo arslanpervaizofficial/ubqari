@@ -135,4 +135,53 @@ class OrderController extends Controller
 
         return back()->with('status', count($orders) . ' order(s) moved to Trash — stock and customer balances adjusted.');
     }
+
+    /** Order-level credit/debit ledger — the walk-in equivalent of a named
+     *  customer's ledger (customers.credit_balance + Customer::payments()).
+     *  A named customer's due carries on their own running balance across
+     *  every order they ever make; a walk-in sale has no such person to
+     *  attach a balance to, so this tracks it against the order itself
+     *  instead — same credit/debit mechanics, just scoped to one order's
+     *  due_amount rather than a customer's lifetime balance. */
+    public function ledger(Order $order)
+    {
+        $payments = $order->payments()->with('user')->latest()->get();
+        return view('orders.ledger', compact('order', 'payments'));
+    }
+
+    /** Credit = payment received against what's still due — due_amount
+     *  goes down, paid_amount goes up. Debit = an additional charge on top
+     *  of the original sale (e.g. a late fee) — due_amount goes up. Mirrors
+     *  CustomerController::recordPayment()'s validation and semantics
+     *  exactly, just applied to one order's due instead of a running
+     *  customer balance. */
+    public function recordPayment(Request $request, Order $order)
+    {
+        $data = $request->validate([
+            'type' => ['required', 'in:credit,debit'],
+            'amount' => ['required', 'numeric', 'min:0.01'],
+            'note' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        if ($data['type'] === 'credit' && $data['amount'] > $order->due_amount) {
+            return back()->withErrors(['amount' => "Amount ({$data['amount']}) is more than what's still due on this order ({$order->due_amount})."]);
+        }
+
+        $order->payments()->create([
+            'type' => $data['type'],
+            'amount' => $data['amount'],
+            'note' => $data['note'] ?? null,
+            'user_id' => auth()->id(),
+        ]);
+
+        if ($data['type'] === 'credit') {
+            $order->decrement('due_amount', $data['amount']);
+            $order->increment('paid_amount', $data['amount']);
+        } else {
+            $order->increment('due_amount', $data['amount']);
+        }
+
+        $label = $data['type'] === 'credit' ? 'Payment recorded' : 'Charge added';
+        return back()->with('status', "{$label}: {$data['amount']}. Order balance updated.");
+    }
 }

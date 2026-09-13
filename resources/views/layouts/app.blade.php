@@ -41,6 +41,14 @@
 
         @media print {
             body { background: #fff !important; }
+            /* Report pages rely on window.print() → "Save as PDF" for
+               export (see reports._export_pdf) — the same pattern already
+               used for invoices/POs. Cards and tables are normally
+               scroll-boxed/shadowed for screen use; neither makes sense on
+               a printed/PDF page, so both are neutralised here globally
+               rather than per report view. */
+            .overflow-x-auto { overflow: visible !important; }
+            .shadow-sm, .shadow-md { box-shadow: none !important; }
         }
     </style>
 </head>
@@ -98,6 +106,14 @@
                 <a href="{{ route('stock-returns.index') }}" class="sidebar-link {{ request()->routeIs('stock-returns.*') ? 'active' : '' }}">
                     <svg class="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3"/></svg>
                     Returns
+                </a>
+                <a href="{{ route('expenses.index') }}" class="sidebar-link {{ request()->routeIs('expenses.*') ? 'active' : '' }}">
+                    <svg class="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-2M9 12h11m0 0l-3-3m3 3l-3 3"/></svg>
+                    Expenses
+                </a>
+                <a href="{{ route('cash-management.index') }}" class="sidebar-link {{ request()->routeIs('cash-management.*') ? 'active' : '' }}">
+                    <svg class="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .672-3 1.5S10.343 11 12 11s3 .672 3 1.5-1.343 1.5-3 1.5m0-6c1.11 0 2.08.402 2.599 1M12 8V6.5M12 15.5V17m0-9C8.686 8 6 9.79 6 12s2.686 4 6 4 6-1.79 6-4-2.686-4-6-4z"/></svg>
+                    Cash Management
                 </a>
                 <a href="{{ route('reports.index') }}" class="sidebar-link {{ request()->routeIs('reports.*') ? 'active' : '' }}">
                     <svg class="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l7-3v13M9 19l-6-2V8l6-2m0 13l7-3M4 8l5-2m7-3l5 2v13l-5-2"/></svg>

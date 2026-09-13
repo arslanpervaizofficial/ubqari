@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Customer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class CustomerController extends Controller
 {
@@ -31,12 +32,16 @@ class CustomerController extends Controller
         return view('customers.create');
     }
 
+    /** $id excludes the record being edited from the email uniqueness
+     *  check — same pattern as ProductController's sku/barcode and
+     *  UserController's username/email — so updating a customer without
+     *  changing their own email doesn't flag itself as a duplicate. */
     private function rules($id = null): array
     {
         return [
             'name' => ['required', 'string', 'max:255'],
             'phone' => ['required', 'string', 'regex:/^[0-9+\-\s]{7,15}$/'],
-            'email' => ['nullable', 'email'],
+            'email' => ['nullable', 'email', Rule::unique('customers', 'email')->ignore($id)],
             'address' => ['nullable', 'string'],
             'id_card_number' => ['nullable', 'string', 'regex:/^\d{5}-\d{7}-\d{1}$/'],
             'current_address' => ['nullable', 'string'],

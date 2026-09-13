@@ -6,18 +6,40 @@
     @media print {
         #invoice-card { box-shadow: none !important; border: none !important; }
     }
-    /* Thermal (80mm receipt) mode — toggled via a body class right before printing */
+    /* Thermal (3-inch / 76mm roll) mode — toggled via a body class right
+     * before printing. Previous version targeted 80mm at 11px, which is
+     * wider than an actual 3" (76.2mm) roll's printable area — that's what
+     * was causing the right edge of each line to get cut off. Printable
+     * width on a 3" roll is usually a little under the full 76.2mm once
+     * the printer's own margins are accounted for, so the content box is
+     * kept slightly narrower (72mm) than the physical page (76mm) as a
+     * safety margin, and the @page size is set explicitly so the browser
+     * doesn't fall back to a default (e.g. A4) page and scale/clip the
+     * content against it. */
     @media print {
+        @page { size: 76mm auto; margin: 0; }
+        body.thermal-print { margin: 0; }
         body.thermal-print #invoice-card {
-            max-width: 80mm !important;
-            width: 80mm !important;
-            font-size: 11px !important;
-            padding: 6px !important;
+            box-sizing: border-box !important;
+            max-width: 72mm !important;
+            width: 72mm !important;
+            margin: 0 auto !important;
+            font-size: 9px !important;
+            line-height: 1.35 !important;
+            padding: 2mm !important;
         }
-        body.thermal-print #invoice-card h1 { font-size: 14px !important; }
-        body.thermal-print #invoice-card table { font-size: 10px !important; }
-        body.thermal-print #invoice-card .invoice-header { flex-direction: column !important; }
-        @page { size: auto; margin: 2mm; }
+        body.thermal-print #invoice-card h1 { font-size: 12px !important; }
+        body.thermal-print #invoice-card p { font-size: 9px !important; }
+        body.thermal-print #invoice-card .invoice-header { flex-direction: column !important; gap: 2px !important; }
+        body.thermal-print #invoice-card .invoice-header > div:last-child { text-align: left !important; margin-top: 2px !important; }
+        body.thermal-print #invoice-card table { font-size: 8px !important; width: 100% !important; table-layout: fixed !important; word-break: break-word !important; }
+        body.thermal-print #invoice-card table th,
+        body.thermal-print #invoice-card table td { padding: 1px 2px !important; }
+        /* Item name column needs the most room; the rest are short numbers */
+        body.thermal-print #invoice-card table th:first-child,
+        body.thermal-print #invoice-card table td:first-child { width: 34% !important; }
+        body.thermal-print #invoice-card .text-lg { font-size: 11px !important; }
+        body.thermal-print #invoice-card .space-y-1 > div { margin-bottom: 1px !important; }
     }
 </style>
 
@@ -61,7 +83,20 @@
         @if($order->bank_name || $order->transaction_id)
             <div class="text-gray-500">{{ $order->bank_name }} @if($order->transaction_id) · Txn: {{ $order->transaction_id }} @endif</div>
         @endif
-        <div>Due: {{ number_format($order->due_amount, 2) }}</div>
+        <div>Due (this order): {{ number_format($order->due_amount, 2) }}</div>
+        @php
+            // customer->credit_balance already has THIS order's due_amount
+            // folded into it (added at checkout), so subtracting it back
+            // out isolates whatever was still owed from earlier, separate
+            // orders — the two are shown separately, then summed, so the
+            // customer sees exactly what they now owe in total, not just
+            // what this one transaction added.
+            $previousDue = $order->customer ? max(0, $order->customer->credit_balance - $order->due_amount) : 0;
+        @endphp
+        @if($order->customer && $previousDue > 0)
+        <div class="border-t pt-1 mt-1">Previous Balance Due: {{ number_format($previousDue, 2) }}</div>
+        <div class="font-bold text-lg text-red-600">Total Amount Due Now: {{ number_format($order->due_amount + $previousDue, 2) }}</div>
+        @endif
         @endif
     </div>
 

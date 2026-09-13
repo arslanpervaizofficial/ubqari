@@ -3,9 +3,12 @@
 @section('content')
 <div class="flex justify-between items-center mb-4">
     <h1 class="text-2xl font-bold">Stock Report</h1>
-    <a href="{{ route('reports.index') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back to Reports</a>
+    <div class="flex gap-2">
+        @include('reports._export_pdf')
+        <a href="{{ route('reports.index') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back to Reports</a>
+    </div>
 </div>
-<form method="GET" data-ajax-filter="stock-report" class="mb-4">
+<form method="GET" data-ajax-filter="stock-report" class="mb-4 print:hidden">
     <input type="hidden" name="filter" value="{{ $filter }}">
     <input type="text" id="stock-search-input" name="search" value="{{ request('search') }}" placeholder="Search product..." class="border rounded px-3 py-2 w-64">
     <button class="btn btn-gray">Search</button>
@@ -13,10 +16,10 @@
 
 <div data-ajax-list="stock-report">
 <div class="bg-white p-5 rounded-xl shadow-sm mb-4">
-    <div class="text-gray-500 text-sm">Total Stock Value (at purchase price)</div>
+    <div class="text-gray-500 text-sm">Total Stock Value (at net purchase price, after supplier discount)</div>
     <div class="text-2xl font-bold" id="total-stock-value">{{ number_format($totalStockValue, 2) }}</div>
 </div>
-<div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+<div class="flex flex-wrap items-center justify-between gap-2 mb-4 print:hidden">
     <div class="flex gap-2">
         <a href="{{ route('reports.stock', ['search' => request('search')]) }}" class="btn {{ $filter === 'all' ? 'btn-dark' : 'btn-gray' }}" data-filter-label="All Products">All ({{ $outOfStockCount + $availableCount }})</a>
         <a href="{{ route('reports.stock', ['filter' => 'available', 'search' => request('search')]) }}" class="btn {{ $filter === 'available' ? 'btn-dark' : 'btn-gray' }}" data-filter-label="Stock Available">Stock Available ({{ $availableCount }})</a>
@@ -36,7 +39,7 @@
             <td class="p-3">{{ $p->name }}</td>
             <td class="p-3">{{ $p->category }}</td>
             <td class="p-3">{{ $p->stock }} {{ $p->unit }}</td>
-            <td class="p-3">{{ number_format($p->stock * $p->purchase_price, 2) }}</td>
+            <td class="p-3">{{ number_format($p->stock * $p->net_purchase_price, 2) }}</td>
             <td class="p-3">
                 @if($p->stock <= 0)
                     <span class="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full">Out of Stock</span>
