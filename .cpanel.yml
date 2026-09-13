@@ -1,0 +1,7 @@
+---
+deployment:
+  tasks:
+    - /opt/cpanel/ea-php83/root/usr/bin/php artisan config:clear
+    - /opt/cpanel/ea-php83/root/usr/bin/php artisan view:clear
+    - /opt/cpanel/ea-php83/root/usr/bin/php artisan route:clear
+    - /opt/cpanel/ea-php83/root/usr/bin/php artisan cache:clear
