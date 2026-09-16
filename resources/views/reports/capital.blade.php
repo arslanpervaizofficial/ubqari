@@ -11,7 +11,7 @@
 
 <p class="text-xs text-gray-400 mb-4">The figures below (Investment, Liabilities, Standard Margin) reflect your current overall standing — they aren't affected by the date filter further down, which only controls the category breakdown and entry list at the very bottom.</p>
 
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Total Investment</div>
         <div class="text-2xl font-bold text-green-700">{{ number_format($totalInvestment, 2) }}</div>
@@ -35,9 +35,14 @@
         <div class="text-xs text-gray-400 mt-1">Owed to people, from <a href="{{ route('cash-management.index') }}" class="underline">Cash Management</a> — now subtracted below in Net Capital</div>
     </div>
     <div class="bg-white p-5 rounded-xl shadow-sm">
+        <div class="text-gray-500 text-sm">Total Receivables</div>
+        <div class="text-2xl font-bold {{ $totalReceivables > 0 ? 'text-blue-700' : '' }}">{{ number_format($totalReceivables, 2) }}</div>
+        <div class="text-xs text-gray-400 mt-1">Owed BY wholesale customers (credit balance on <a href="{{ route('customers.index') }}" class="underline">Customers</a>), from unpaid orders or a manual charge — now added below in Net Capital</div>
+    </div>
+    <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Net Capital</div>
         <div class="text-2xl font-bold {{ $netCapital < 0 ? 'text-red-600' : '' }}">{{ number_format($netCapital, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1">Remaining Investment − Expenses − Liabilities</div>
+        <div class="text-xs text-gray-400 mt-1">Remaining Investment + Receivables − Expenses − Liabilities</div>
     </div>
 </div>
 

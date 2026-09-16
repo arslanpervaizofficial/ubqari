@@ -13,11 +13,13 @@
     <input type="date" name="to" value="{{ $to }}" class="border rounded px-3 py-2">
     <button class="btn btn-gray">Filter</button>
 </form>
+<p class="text-xs text-gray-400 mb-4">This page is scoped to the date range above. The Capital Report's "Stock Purchased" figure is all-time — the two will only match exactly when this range covers your entire purchase history.</p>
 <div data-ajax-list="purchases">
-<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+<div class="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-4">
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Total Purchase Value</div>
         <div class="text-2xl font-bold">{{ number_format($totalPurchaseValue, 2) }}</div>
+        <div class="text-xs text-gray-400 mt-1">Received POs only, at actual received quantity — matches Total Investment's "Stock Purchased" on the Capital Report</div>
     </div>
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Returned to Supplier</div>
@@ -26,6 +28,11 @@
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Net Purchase Value</div>
         <div class="text-2xl font-bold text-green-700">{{ number_format($netPurchaseValue, 2) }}</div>
+    </div>
+    <div class="bg-white p-5 rounded-xl shadow-sm">
+        <div class="text-gray-500 text-sm">Pending (not yet received)</div>
+        <div class="text-2xl font-bold text-yellow-600">{{ number_format($pendingValue, 2) }}</div>
+        <div class="text-xs text-gray-400 mt-1">Estimated at ordered quantity — not counted above until received</div>
     </div>
 </div>
 
@@ -57,15 +64,16 @@
         </div>
         <table class="w-full text-sm">
             <thead class="text-left text-gray-500 border-b">
-                <tr><th class="py-1">Product</th><th>Quantity</th><th>Cost Price</th><th>Disc %</th><th class="text-right">Line Total</th></tr>
+                <tr><th class="py-1">Product</th><th>{{ $po->status === 'received' ? 'Received Qty' : 'Ordered Qty' }}</th><th>Cost Price</th><th>Disc %</th><th class="text-right">Line Total</th></tr>
             </thead>
             <tbody>
             @foreach($po->items as $item)
-                <tr class="border-t"><td class="py-1">{{ $item->product->name ?? '—' }}</td><td>{{ $item->quantity }}</td><td>{{ number_format($item->cost_price,2) }}</td><td>{{ $item->discount_percent }}%</td><td class="text-right">{{ number_format($item->line_total,2) }}</td></tr>
+                @php $qty = $po->status === 'received' ? $item->received_quantity : $item->quantity; @endphp
+                <tr class="border-t"><td class="py-1">{{ $item->product->name ?? '—' }}</td><td>{{ $qty }}</td><td>{{ number_format($item->cost_price,2) }}</td><td>{{ $item->discount_percent }}%</td><td class="text-right">{{ number_format($qty * $item->net_cost_price, 2) }}</td></tr>
             @endforeach
             </tbody>
         </table>
-        <div class="text-right font-semibold mt-2">Total: {{ number_format($po->total, 2) }}</div>
+        <div class="text-right font-semibold mt-2">Total: {{ number_format($po->status === 'received' ? $po->items->sum(fn($i) => $i->received_quantity * $i->net_cost_price) : $po->total, 2) }}</div>
     </div>
 @endforeach
 </div>

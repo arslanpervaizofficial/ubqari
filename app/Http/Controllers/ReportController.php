@@ -107,7 +107,27 @@ class ReportController extends Controller
         return view('reports.stock', compact('products', 'totalStockValue', 'filter', 'outOfStockCount', 'availableCount'));
     }
 
-    /** Purchase report: all purchase orders with supplier + line item breakdown. */
+    /** Purchase report: all purchase orders with supplier + line item breakdown.
+     *
+     *  "Total Purchase Value" here is deliberately RECEIVED-only and
+     *  RECEIVED-QUANTITY-based — i.e. the same thing the Capital Report's
+     *  Total Investment counts as "Stock Purchased" — so the two numbers
+     *  reconcile instead of drifting apart:
+     *   - A pending (not-yet-received) PO hasn't actually put anything into
+     *     stock yet, so it doesn't belong in either figure. It used to be
+     *     summed in here regardless of status, which could make this page
+     *     show more than the Capital Report even for the exact same range.
+     *   - `purchase_orders.total` is computed off the ORDERED quantity at
+     *     create time and is only ever refreloaded when that PO's own show
+     *     page happens to be opened later. If the actual received quantity
+     *     differed from what was ordered (short/over-ship) and nobody opened
+     *     that page, the stored total silently stayed wrong — while the
+     *     Capital Report's figure is a live query off received_quantity and
+     *     was never affected. Computing it fresh here the same way removes
+     *     that whole class of drift.
+     *  Pending POs are still listed (and their estimated value shown per-PO
+     *  as before) so nothing disappears from view — they just don't feed
+     *  the headline totals until they're actually received. */
     public function purchases(Request $request)
     {
         $from = $request->input('from', now()->startOfMonth()->toDateString());
@@ -124,12 +144,16 @@ class ReportController extends Controller
             ->latest()
             ->get();
 
-        $totalPurchaseValue = $purchaseOrders->sum('total');
+        $totalPurchaseValue = (float) PurchaseOrderItem::join('purchase_orders', 'purchase_order_items.purchase_order_id', '=', 'purchase_orders.id')
+            ->where('purchase_orders.status', 'received')
+            ->whereBetween('purchase_orders.created_at', [$from, $to . ' 23:59:59'])
+            ->sum(DB::raw('purchase_order_items.received_quantity * purchase_order_items.cost_price * (1 - COALESCE(purchase_order_items.discount_percent, 0) / 100)'));
+        $pendingValue = (float) $purchaseOrders->where('status', '!=', 'received')->sum('total');
         $totalReturnedValue = $supplierReturns->sum(fn ($r) => $r->net_amount);
         $netPurchaseValue = $totalPurchaseValue - $totalReturnedValue;
 
         return view('reports.purchases', compact(
-            'purchaseOrders', 'supplierReturns', 'totalPurchaseValue',
+            'purchaseOrders', 'supplierReturns', 'totalPurchaseValue', 'pendingValue',
             'totalReturnedValue', 'netPurchaseValue', 'from', 'to'
         ));
     }
@@ -238,11 +262,22 @@ class ReportController extends Controller
         // for a complete picture. It's still managed entirely on its own
         // Cash Management page; nothing here writes back to it.
         $totalLiabilities = (float) CashParty::sum('balance');
-        // Net Capital is meant to reflect true current standing (equity),
-        // so it's Remaining Investment minus BOTH what's been spent AND
-        // what's owed to others — Liabilities used to only be displayed
-        // here, with no actual effect on this figure.
-        $netCapital = $remainingInvestment - $totalExpenses - $totalLiabilities;
+        // Money customers owe THE BUSINESS (a wholesale customer's running
+        // tab — credit_balance, raised either by an unpaid due_amount on a
+        // real order, or by a manual debit/charge entered on their ledger
+        // with no order at all — e.g. an opening balance carried over from
+        // before this system). Either way it's a real receivable asset:
+        // goods or value already went out, cash for it hasn't come back
+        // yet. Mirrors Liabilities just above (money owed TO others is
+        // subtracted here), so money owed BY others is added — without
+        // this, recording a customer debit with no matching order visibly
+        // did nothing to the business's standing, which is what made it
+        // look like a bug rather than an incomplete picture.
+        $totalReceivables = (float) Customer::sum('credit_balance');
+        // Net Capital is meant to reflect true current standing (equity):
+        // Remaining Investment, plus what customers still owe (an asset),
+        // minus what's been spent AND what's owed to others (liabilities).
+        $netCapital = $remainingInvestment + $totalReceivables - $totalExpenses - $totalLiabilities;
 
         // --- Standard Margin (Revenue − Cost of Goods Sold). The old
         // "Profit & Loss" card (discount-differential formula) was removed
@@ -296,7 +331,7 @@ class ReportController extends Controller
         $expenses = (clone $query)->with('user')->latest('expense_date')->latest('id')->get();
 
         return view('reports.capital', compact(
-            'totalInvestment', 'cumulativePurchaseCost', 'remainingInvestment', 'totalExpenses', 'netCapital', 'stockValue', 'cashInjected', 'totalLiabilities',
+            'totalInvestment', 'cumulativePurchaseCost', 'remainingInvestment', 'totalExpenses', 'netCapital', 'stockValue', 'cashInjected', 'totalLiabilities', 'totalReceivables',
             'totalRevenue', 'approxCogs', 'approxGrossMargin', 'approxNetProfit',
             'monthly', 'year', 'byCategory', 'expenses', 'from', 'to'
         ));

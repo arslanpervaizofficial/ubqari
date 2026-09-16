@@ -253,6 +253,17 @@ class PurchaseOrderController extends Controller
                 }
             }
             $purchaseOrder->update(['status' => 'received']);
+
+            // Realign subtotal/total with what was ACTUALLY received right
+            // away, rather than leaving the ordered-quantity figures stored
+            // at store() time sitting there until someone happens to open
+            // this PO's show page (the only other place this ran before).
+            // Left un-recalculated, any PO received with a short/over-ship
+            // silently kept a wrong `total`, which the Purchase Report reads
+            // straight off the row — throwing it out of sync with the
+            // Capital Report's Total Investment, which is computed live
+            // from received_quantity and was never wrong to begin with.
+            $this->recalculateTotals($purchaseOrder->fresh());
         });
 
         return redirect()->route('purchase-orders.index')->with('status', 'PO marked received — stock updated with actual received quantities.');
