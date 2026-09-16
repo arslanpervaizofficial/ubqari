@@ -9,7 +9,6 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\PurchaseOrder;
-use App\Models\PurchaseOrderItem;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -109,22 +108,21 @@ class ReportController extends Controller
 
     /** Purchase report: all purchase orders with supplier + line item breakdown.
      *
-     *  "Total Purchase Value" here is deliberately RECEIVED-only and
-     *  RECEIVED-QUANTITY-based — i.e. the same thing the Capital Report's
-     *  Total Investment counts as "Stock Purchased" — so the two numbers
-     *  reconcile instead of drifting apart:
+     *  "Total Purchase Value" is the sum of each RECEIVED PO's own `total`
+     *  column — the same figure the Capital Report's "Stock Purchased"
+     *  counts — so the two reconcile instead of drifting apart:
      *   - A pending (not-yet-received) PO hasn't actually put anything into
      *     stock yet, so it doesn't belong in either figure. It used to be
      *     summed in here regardless of status, which could make this page
      *     show more than the Capital Report even for the exact same range.
-     *   - `purchase_orders.total` is computed off the ORDERED quantity at
-     *     create time and is only ever refreloaded when that PO's own show
-     *     page happens to be opened later. If the actual received quantity
-     *     differed from what was ordered (short/over-ship) and nobody opened
-     *     that page, the stored total silently stayed wrong — while the
-     *     Capital Report's figure is a live query off received_quantity and
-     *     was never affected. Computing it fresh here the same way removes
-     *     that whole class of drift.
+     *   - Relying on the stored `total` column (rather than recomputing
+     *     just the line-item subtotal here) is only safe because
+     *     PurchaseOrderController now keeps it correct at every point it
+     *     can change: recalculated the moment a PO is received, on every
+     *     view of its show page, on every load of the PO list, and after
+     *     any line/discount edit. That also means it correctly reflects
+     *     any PO-level (header) discount on top of the per-line ones,
+     *     which a bare item-level subtotal here would have missed.
      *  Pending POs are still listed (and their estimated value shown per-PO
      *  as before) so nothing disappears from view — they just don't feed
      *  the headline totals until they're actually received. */
@@ -144,10 +142,7 @@ class ReportController extends Controller
             ->latest()
             ->get();
 
-        $totalPurchaseValue = (float) PurchaseOrderItem::join('purchase_orders', 'purchase_order_items.purchase_order_id', '=', 'purchase_orders.id')
-            ->where('purchase_orders.status', 'received')
-            ->whereBetween('purchase_orders.created_at', [$from, $to . ' 23:59:59'])
-            ->sum(DB::raw('purchase_order_items.received_quantity * purchase_order_items.cost_price * (1 - COALESCE(purchase_order_items.discount_percent, 0) / 100)'));
+        $totalPurchaseValue = (float) $purchaseOrders->where('status', 'received')->sum('total');
         $pendingValue = (float) $purchaseOrders->where('status', '!=', 'received')->sum('total');
         $totalReturnedValue = $supplierReturns->sum(fn ($r) => $r->net_amount);
         $netPurchaseValue = $totalPurchaseValue - $totalReturnedValue;
@@ -235,14 +230,12 @@ class ReportController extends Controller
         // ever put into the business, whether as stock purchases or cash
         // injections. It never moves when a product sells — that's the
         // whole point of it (a running "how much have we invested so far"
-        // total). So it's built from the cumulative net cost of everything
-        // ever RECEIVED on a Purchase Order (not current stock — that
-        // shrinks with sales), plus cash injected — same
-        // received_quantity × net cost_price approach as the COGS query
-        // below.
-        $cumulativePurchaseCost = (float) PurchaseOrderItem::join('purchase_orders', 'purchase_order_items.purchase_order_id', '=', 'purchase_orders.id')
-            ->where('purchase_orders.status', 'received')
-            ->sum(DB::raw('purchase_order_items.received_quantity * purchase_order_items.cost_price * (1 - COALESCE(purchase_order_items.discount_percent, 0) / 100)'));
+        // total). So it's built from the sum of every RECEIVED PO's own
+        // `total` column (which PurchaseOrderController keeps correct at
+        // every point it can change — see the comment on
+        // ReportController::purchases() for why that's now safe to rely
+        // on directly, header discounts included) plus cash injected.
+        $cumulativePurchaseCost = (float) PurchaseOrder::where('status', 'received')->sum('total');
         $totalInvestment = $cumulativePurchaseCost + $cashInjected;
 
         // Remaining Investment is what's actually still tied up in the

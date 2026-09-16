@@ -12,9 +12,18 @@ use Illuminate\Support\Facades\DB;
 
 class PurchaseOrderController extends Controller
 {
+    /** Lists all POs. Received ones have their totals realigned to actual
+     *  received quantity on every load here too (not just on show()) —
+     *  so a PO received before this self-healing existed doesn't sit with
+     *  a stale total on this very page until someone happens to open it. */
     public function index()
     {
-        $purchaseOrders = PurchaseOrder::with('supplier')->latest()->paginate(20);
+        $purchaseOrders = PurchaseOrder::with('supplier', 'items')->latest()->paginate(20);
+        foreach ($purchaseOrders as $po) {
+            if ($po->status === 'received') {
+                $this->recalculateTotals($po);
+            }
+        }
         return view('purchase_orders.index', compact('purchaseOrders'));
     }
 
@@ -137,11 +146,15 @@ class PurchaseOrderController extends Controller
             'discount_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'items' => ['required', 'array', 'min:1'],
             'items.*.product_id' => ['required', 'exists:products,id'],
-            'items.*.quantity' => ['required', 'numeric', 'min:0.01'],
+            'items.*.quantity' => ['required', 'numeric', 'min:0'],
             'items.*.cost_price' => ['required', 'numeric', 'min:0'],
             'items.*.discount_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'items.*.max_discount_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
         ]);
+
+        if (collect($data['items'])->every(fn ($line) => (float) $line['quantity'] === 0.0)) {
+            return back()->withErrors(['items' => 'At least one product needs a quantity greater than 0.'])->withInput();
+        }
 
         $po = DB::transaction(function () use ($data) {
             $po = PurchaseOrder::create([
@@ -155,6 +168,20 @@ class PurchaseOrderController extends Controller
 
             $subtotal = 0;
             foreach ($data['items'] as $line) {
+                // A line left at 0 quantity means "picked this product but
+                // not actually ordering it this time" (e.g. added it via
+                // the product picker, then changed their mind) — skip it
+                // entirely rather than forcing it in as a real line. It used
+                // to be REQUIRED to be at least 0.01 to pass validation,
+                // which is exactly why 0.01-quantity phantom lines (like the
+                // "Ubqari Sabaya Perfume" ones at Rs 20 each) ended up in
+                // real purchase orders and quietly inflated every total
+                // downstream — the Purchase/Capital reports, this PO's own
+                // stored total, all of it.
+                if ((float) $line['quantity'] === 0.0) {
+                    continue;
+                }
+
                 $line['discount_percent'] = $line['discount_percent'] ?? 0;
 
                 // Max Discount % isn't a Purchase Order attribute at all —

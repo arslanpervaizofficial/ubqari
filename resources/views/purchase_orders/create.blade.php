@@ -155,7 +155,7 @@ function addLine(productId = null, qty = '', cost = null, focusSearch = false) {
                    class="po-product-search border rounded px-2 py-1 w-full" value="${preset ? preset.name + ' (' + preset.sku + ')' : ''}">
         </td>
         <td class="px-4 po-remaining-stock text-gray-500 whitespace-nowrap">0</td>
-        <td class="px-4"><input type="number" step="0.01" min="0.01" name="items[${i}][quantity]" value="${qty}" required class="po-qty border rounded px-2 py-1 w-24"></td>
+        <td class="px-4"><input type="number" step="0.01" min="0" name="items[${i}][quantity]" value="${qty}" required class="po-qty border rounded px-2 py-1 w-24"></td>
         <td class="px-4 po-new-stock font-medium text-green-700 whitespace-nowrap">0</td>
         <td class="px-4"><input type="number" step="0.01" min="0" name="items[${i}][cost_price]" value="${cost ?? (preset ? preset.cost : '')}" required class="po-cost border rounded px-2 py-1 w-28"></td>
         <td class="px-4"><input type="number" step="0.01" min="0" max="100" name="items[${i}][discount_percent]" value="${preset ? preset.discount : 0}" class="po-discount border rounded px-2 py-1 w-20"></td>

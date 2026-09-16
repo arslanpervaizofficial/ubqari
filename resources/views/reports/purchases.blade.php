@@ -73,7 +73,7 @@
             @endforeach
             </tbody>
         </table>
-        <div class="text-right font-semibold mt-2">Total: {{ number_format($po->status === 'received' ? $po->items->sum(fn($i) => $i->received_quantity * $i->net_cost_price) : $po->total, 2) }}</div>
+        <div class="text-right font-semibold mt-2">Total: {{ number_format($po->total, 2) }}</div>
     </div>
 @endforeach
 </div>
