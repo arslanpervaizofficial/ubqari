@@ -305,7 +305,12 @@ class ReportController extends Controller
         $approxGrossMargin = $totalRevenue - $approxCogs;
         $approxNetProfit = $approxGrossMargin - $totalExpenses;
 
-        $monthly = $this->monthlyCapitalBreakdown($year);
+        $breakdownView = $request->input('view', 'yearly') === 'monthly' ? 'monthly' : 'yearly';
+        $month = (int) ($request->input('month') ?: now()->month);
+        $month = max(1, min(12, $month));
+        $monthly = $breakdownView === 'monthly'
+            ? $this->dailyCapitalBreakdown($year, $month)
+            : $this->monthlyCapitalBreakdown($year);
 
         // --- Period log (still date-filtered — this part is a browsable
         // history, unlike the snapshot figures above) ---
@@ -326,7 +331,7 @@ class ReportController extends Controller
         return view('reports.capital', compact(
             'totalInvestment', 'cumulativePurchaseCost', 'remainingInvestment', 'totalExpenses', 'netCapital', 'stockValue', 'cashInjected', 'totalLiabilities', 'totalReceivables',
             'totalRevenue', 'approxCogs', 'approxGrossMargin', 'approxNetProfit',
-            'monthly', 'year', 'byCategory', 'expenses', 'from', 'to'
+            'monthly', 'year', 'byCategory', 'expenses', 'from', 'to', 'breakdownView', 'month'
         ));
     }
 
@@ -389,5 +394,60 @@ class ReportController extends Controller
         }
 
         return array_values($months);
+    }
+
+    /** Same idea as monthlyCapitalBreakdown() above, but one row per DAY of
+     *  the given month/year instead of one row per month of the year — used
+     *  when the "Monthly" view is picked on the Capital Report, so you can
+     *  see which specific day's sales drove that month's profit rather than
+     *  only the month's total. */
+    private function dailyCapitalBreakdown(int $year, int $month): array
+    {
+        $daysInMonth = \Carbon\Carbon::create($year, $month, 1)->daysInMonth;
+
+        $days = [];
+        foreach (range(1, $daysInMonth) as $d) {
+            $days[$d] = [
+                'day' => $d,
+                'label' => \Carbon\Carbon::create($year, $month, $d)->format('d M'),
+                'cash_in' => 0.0, 'cash_out' => 0.0,
+                'revenue' => 0.0, 'cogs' => 0.0,
+                'expenses' => 0.0, 'gross_margin' => 0.0, 'net_profit' => 0.0,
+            ];
+        }
+
+        Expense::whereYear('expense_date', $year)->whereMonth('expense_date', $month)->get()->each(function ($e) use (&$days) {
+            $d = $e->expense_date->day;
+            if ($e->type === 'cash_in') {
+                $days[$d]['cash_in'] += (float) $e->amount;
+            } else {
+                $days[$d]['cash_out'] += (float) $e->amount;
+                $days[$d]['expenses'] += (float) $e->amount;
+            }
+        });
+
+        Order::where('status', 'completed')
+            ->whereYear(DB::raw('COALESCE(original_completed_at, created_at)'), $year)
+            ->whereMonth(DB::raw('COALESCE(original_completed_at, created_at)'), $month)
+            ->with('items.product')
+            ->get()
+            ->each(function ($order) use (&$days) {
+                $d = ($order->original_completed_at ?? $order->created_at)->day;
+                $days[$d]['revenue'] += (float) $order->total;
+                $order->items->each(function ($item) use (&$days, $d) {
+                    if (!$item->product) return;
+                    $days[$d]['cogs'] += $item->quantity * $item->product->net_purchase_price;
+                });
+            });
+
+        foreach ($days as $d => $row) {
+            $margin = $row['revenue'] - $row['cogs'];
+            $days[$d]['gross_margin'] = round($margin, 2);
+            $days[$d]['net_profit'] = round($margin - $row['expenses'], 2);
+            $days[$d]['revenue'] = round($row['revenue'], 2);
+            $days[$d]['cogs'] = round($row['cogs'], 2);
+        }
+
+        return array_values($days);
     }
 }

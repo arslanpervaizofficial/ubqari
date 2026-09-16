@@ -78,28 +78,46 @@
 </div>
 
 <div class="bg-white rounded-xl shadow-sm overflow-x-auto mb-6">
-<div class="flex justify-between items-center p-4 border-b">
-    <h2 class="font-semibold">Monthly Breakdown</h2>
+<div class="flex justify-between items-center p-4 border-b flex-wrap gap-2">
+    <h2 class="font-semibold">{{ $breakdownView === 'monthly' ? 'Daily Breakdown' : 'Monthly Breakdown' }}</h2>
     <form method="GET" data-ajax-filter="capital" class="flex gap-2 items-center print:hidden">
         <input type="hidden" name="from" value="{{ $from }}">
         <input type="hidden" name="to" value="{{ $to }}">
+        <label class="text-sm text-gray-500">View</label>
+        <select name="view" onchange="this.form.submit()" class="border rounded px-2 py-1 text-sm">
+            <option value="yearly" {{ $breakdownView === 'yearly' ? 'selected' : '' }}>Yearly (monthly rows)</option>
+            <option value="monthly" {{ $breakdownView === 'monthly' ? 'selected' : '' }}>Monthly (daily rows)</option>
+        </select>
         <label class="text-sm text-gray-500">Year</label>
         <select name="year" onchange="this.form.submit()" class="border rounded px-2 py-1 text-sm">
             @for($y = now()->year; $y >= now()->year - 4; $y--)
                 <option value="{{ $y }}" {{ $y == $year ? 'selected' : '' }}>{{ $y }}</option>
             @endfor
         </select>
+        @if($breakdownView === 'monthly')
+        <label class="text-sm text-gray-500">Month</label>
+        <select name="month" onchange="this.form.submit()" class="border rounded px-2 py-1 text-sm">
+            @for($m = 1; $m <= 12; $m++)
+                <option value="{{ $m }}" {{ $m == $month ? 'selected' : '' }}>{{ \Carbon\Carbon::create($year, $m, 1)->format('M') }}</option>
+            @endfor
+        </select>
+        @endif
     </form>
 </div>
 <table class="w-full text-sm">
     <thead class="bg-gray-50 text-left"><tr>
-        <th class="p-3">Month</th><th class="p-3">Cash In</th><th class="p-3">Cash Out</th>
+        <th class="p-3">{{ $breakdownView === 'monthly' ? 'Day' : 'Month' }}</th><th class="p-3">Cash In</th><th class="p-3">Cash Out</th>
         <th class="p-3">Revenue</th><th class="p-3">Est. COGS</th>
         <th class="p-3">Gross Margin</th><th class="p-3">Net Profit</th>
     </tr></thead>
     <tbody>
     @foreach($monthly as $row)
-        <tr class="border-t {{ $row['month'] == now()->month && $year == now()->year ? 'bg-blue-50' : '' }}">
+        @php
+            $isCurrent = $breakdownView === 'monthly'
+                ? ($row['day'] == now()->day && $month == now()->month && $year == now()->year)
+                : ($row['month'] == now()->month && $year == now()->year);
+        @endphp
+        <tr class="border-t {{ $isCurrent ? 'bg-blue-50' : '' }}">
             <td class="p-3 font-medium">{{ $row['label'] }}</td>
             <td class="p-3 text-green-700">{{ number_format($row['cash_in'], 2) }}</td>
             <td class="p-3 text-red-600">{{ number_format($row['cash_out'], 2) }}</td>
@@ -112,7 +130,7 @@
     </tbody>
     <tfoot>
         <tr class="border-t-2 font-semibold bg-gray-50">
-            <td class="p-3">Total ({{ $year }})</td>
+            <td class="p-3">Total ({{ $breakdownView === 'monthly' ? \Carbon\Carbon::create($year, $month, 1)->format('M Y') : $year }})</td>
             <td class="p-3 text-green-700">{{ number_format(collect($monthly)->sum('cash_in'), 2) }}</td>
             <td class="p-3 text-red-600">{{ number_format(collect($monthly)->sum('cash_out'), 2) }}</td>
             <td class="p-3">{{ number_format(collect($monthly)->sum('revenue'), 2) }}</td>
@@ -125,7 +143,9 @@
 </div>
 
 <form method="GET" data-ajax-filter="capital" class="flex gap-2 mb-4 print:hidden">
+    <input type="hidden" name="view" value="{{ $breakdownView }}">
     <input type="hidden" name="year" value="{{ $year }}">
+    <input type="hidden" name="month" value="{{ $month }}">
     <input type="date" name="from" value="{{ $from }}" class="border rounded px-3 py-2">
     <input type="date" name="to" value="{{ $to }}" class="border rounded px-3 py-2">
     <button class="btn btn-gray">Filter Entry List</button>
