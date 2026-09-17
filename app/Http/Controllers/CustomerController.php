@@ -182,7 +182,7 @@ class CustomerController extends Controller
      *  recordPayment() above. */
     public function updatePayment(Request $request, Customer $customer, CustomerPayment $payment)
     {
-        abort_unless($payment->customer_id === $customer->id, 404);
+        abort_unless((int) $payment->customer_id === (int) $customer->id, 404);
 
         $data = $request->validate([
             'type' => ['required', 'in:credit,debit'],
@@ -209,7 +209,7 @@ class CustomerController extends Controller
      *  it from Trash (see TrashController) re-applies the effect. */
     public function destroyPayment(Customer $customer, CustomerPayment $payment)
     {
-        abort_unless($payment->customer_id === $customer->id, 404);
+        abort_unless((int) $payment->customer_id === (int) $customer->id, 404);
 
         DB::transaction(function () use ($payment) {
             $payment->reverseEffect();
