@@ -48,7 +48,7 @@
                     <select id="customer-select" class="border rounded px-3 py-2">
                         <option value="">Walk-in (no discount)</option>
                         @foreach($customers as $c)
-                            <option value="{{ $c->id }}" @selected($order->customer_id === $c->id)>{{ $c->name }} ({{ $c->discount_percent }}%)</option>
+                            <option value="{{ $c->id }}" @selected((int) $order->customer_id === (int) $c->id)>{{ $c->name }} ({{ $c->discount_percent }}%)</option>
                         @endforeach
                     </select>
                 </div>
