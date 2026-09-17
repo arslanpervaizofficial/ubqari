@@ -71,6 +71,9 @@
                         @elseif($slug === 'expenses')
                             <span class="font-medium">{{ $item->type === 'cash_in' ? 'Cash In' : 'Cash Out' }}{{ $item->category ? ' — '.$item->category : '' }}</span>
                             <span class="text-gray-400">{{ $item->expense_date->format('Y-m-d') }} — {{ number_format($item->amount, 2) }}</span>
+                        @elseif($slug === 'customer-payments')
+                            <span class="font-medium">{{ $item->type === 'credit' ? 'Credit' : 'Debit' }} — {{ $item->customer->name ?? '—' }}</span>
+                            <span class="text-gray-400">{{ number_format($item->amount, 2) }}{{ $item->note ? ' — '.$item->note : '' }}</span>
                         @endif
                     </td>
                     <td class="p-3 text-gray-500">{{ $item->deleted_at->format('Y-m-d H:i') }}</td>

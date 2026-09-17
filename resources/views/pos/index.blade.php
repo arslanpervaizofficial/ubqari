@@ -61,7 +61,13 @@
                 <div class="text-sm">Subtotal: <span id="subtotal">{{ number_format($order->subtotal, 2) }}</span></div>
                 <div class="text-sm">Item Discounts: -<span id="line-discount">{{ number_format($order->line_discount_total, 2) }}</span></div>
                 <div class="text-sm">Overall Discount: -<span id="discount">{{ number_format($order->discount_amount, 2) }}</span></div>
-                <div class="text-xl font-bold mt-1">Total: <span id="total">{{ number_format($order->total, 2) }}</span></div>
+                <div class="text-xl font-bold mt-1">Total Bill Payment: <span id="total">{{ number_format($order->total, 2) }}</span></div>
+                <div class="text-sm mt-1 {{ $order->customer ? '' : 'hidden' }}" id="due-payment-row">
+                    Due Payment (previous balance): <span id="due-payment" class="{{ ($order->customer->credit_balance ?? 0) > 0 ? 'text-red-600 font-medium' : (($order->customer->credit_balance ?? 0) < 0 ? 'text-blue-700 font-medium' : '') }}">{{ number_format($order->customer->credit_balance ?? 0, 2) }}</span>
+                </div>
+                <div class="text-lg font-bold mt-1 {{ $order->customer ? '' : 'hidden' }}" id="total-with-due-row">
+                    Total Payment with Due: <span id="total-with-due">{{ number_format($order->total + ($order->customer->credit_balance ?? 0), 2) }}</span>
+                </div>
             </div>
         </div>
 
@@ -182,6 +188,28 @@ function renderOrder(order) {
     document.getElementById('total').textContent = Number(order.total).toFixed(2);
     document.getElementById('overall-discount').value = order.discount_percent;
     document.querySelector('#checkout-modal input[name="paid_amount"]').value = order.total;
+
+    // Previous outstanding balance (or advance) this customer already
+    // carries, shown alongside this bill's own total — separate from it,
+    // never merged into it, so completing this order still only affects
+    // ITS OWN due_amount/credit_balance the way it always has. Purely
+    // informational: lets the cashier see "if I collect just this bill,
+    // this is still what they'd owe overall" before deciding how much to
+    // actually take.
+    const dueRow = document.getElementById('due-payment-row');
+    const totalWithDueRow = document.getElementById('total-with-due-row');
+    if (order.customer) {
+        const due = Number(order.customer.credit_balance);
+        const dueEl = document.getElementById('due-payment');
+        dueEl.textContent = due.toFixed(2);
+        dueEl.className = due > 0 ? 'text-red-600 font-medium' : (due < 0 ? 'text-blue-700 font-medium' : '');
+        document.getElementById('total-with-due').textContent = (Number(order.total) + due).toFixed(2);
+        dueRow.classList.remove('hidden');
+        totalWithDueRow.classList.remove('hidden');
+    } else {
+        dueRow.classList.add('hidden');
+        totalWithDueRow.classList.add('hidden');
+    }
 }
 
 renderOrder(@json($order));

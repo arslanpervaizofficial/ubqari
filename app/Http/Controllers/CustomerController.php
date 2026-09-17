@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\Customer;
+use App\Models\CustomerPayment;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -139,7 +141,11 @@ class CustomerController extends Controller
 
     /** Record a standalone credit or debit against the customer's balance (no order involved).
      *  Credit = they paid something off (or a return reduced what they owe) — balance goes down.
-     *  Debit  = a manual charge/adjustment — balance goes up. */
+     *  Debit  = a manual charge/adjustment — balance goes up.
+     *  A credit larger than what's currently owed is allowed — it just
+     *  takes the balance negative, meaning the customer has now overpaid
+     *  and the business owes THEM (an advance/credit on their account),
+     *  rather than being blocked as an error. */
     public function recordPayment(Request $request, Customer $customer)
     {
         $data = $request->validate([
@@ -147,10 +153,6 @@ class CustomerController extends Controller
             'amount' => ['required', 'numeric', 'min:0.01'],
             'note' => ['nullable', 'string', 'max:255'],
         ]);
-
-        if ($data['type'] === 'credit' && $data['amount'] > $customer->credit_balance) {
-            return back()->withErrors(['amount' => "Amount (Rs {$data['amount']}) is more than the outstanding balance (Rs {$customer->credit_balance})."]);
-        }
 
         $customer->payments()->create([
             'type' => $data['type'],
@@ -166,6 +168,54 @@ class CustomerController extends Controller
         }
 
         $label = $data['type'] === 'credit' ? 'Payment recorded' : 'Charge added';
-        return back()->with('status', "{$label}: Rs {$data['amount']}. Credit balance updated.");
+        $customer->refresh();
+        $balanceNote = $customer->credit_balance < 0
+            ? " Customer now has an advance/credit balance of Rs " . number_format(abs($customer->credit_balance), 2) . "."
+            : '';
+        return back()->with('status', "{$label}: Rs {$data['amount']}.{$balanceNote}");
+    }
+
+    /** Edit an existing Credit/Debit ledger entry — reverses its old effect
+     *  on credit_balance first, then applies the new type/amount, so the
+     *  balance never double-counts the old value while the new one is
+     *  also in effect. Same "credit can exceed what's owed" allowance as
+     *  recordPayment() above. */
+    public function updatePayment(Request $request, Customer $customer, CustomerPayment $payment)
+    {
+        abort_unless($payment->customer_id === $customer->id, 404);
+
+        $data = $request->validate([
+            'type' => ['required', 'in:credit,debit'],
+            'amount' => ['required', 'numeric', 'min:0.01'],
+            'note' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        DB::transaction(function () use ($payment, $data) {
+            $payment->reverseEffect();
+            $payment->update($data);
+            if ($data['type'] === 'credit') {
+                $payment->customer->decrement('credit_balance', $data['amount']);
+            } else {
+                $payment->customer->increment('credit_balance', $data['amount']);
+            }
+        });
+
+        return back()->with('status', 'Ledger entry updated and balance adjusted.');
+    }
+
+    /** Moves a Credit/Debit ledger entry to Trash — reverses its effect on
+     *  credit_balance first (same reasoning as OrderController::destroy()),
+     *  so the balance stays accurate while it's sitting in Trash. Restoring
+     *  it from Trash (see TrashController) re-applies the effect. */
+    public function destroyPayment(Customer $customer, CustomerPayment $payment)
+    {
+        abort_unless($payment->customer_id === $customer->id, 404);
+
+        DB::transaction(function () use ($payment) {
+            $payment->reverseEffect();
+            $payment->delete();
+        });
+
+        return back()->with('status', 'Ledger entry moved to Trash and balance adjusted.');
     }
 }

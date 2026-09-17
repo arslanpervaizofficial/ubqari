@@ -228,7 +228,7 @@ class POSController extends Controller
 
         return response()->json([
             'success' => true,
-            'order' => $order->fresh('items.product'),
+            'order' => $order->fresh('items.product', 'customer'),
             'available_stock' => $this->availableStock($product),
             'warning' => $warning,
         ]);
@@ -240,7 +240,7 @@ class POSController extends Controller
         $item->delete();
         $this->recalculateTotals($order);
 
-        return response()->json(['success' => true, 'order' => $order->fresh('items.product')]);
+        return response()->json(['success' => true, 'order' => $order->fresh('items.product', 'customer')]);
     }
 
     public function updateItemQuantity(Request $request, OrderItem $item)
@@ -281,7 +281,7 @@ class POSController extends Controller
 
         return response()->json([
             'success' => true,
-            'order' => $item->order->fresh('items.product'),
+            'order' => $item->order->fresh('items.product', 'customer'),
             'warning' => $warning,
         ]);
     }
@@ -304,7 +304,7 @@ class POSController extends Controller
 
         return response()->json([
             'success' => true,
-            'order' => $item->order->fresh('items.product'),
+            'order' => $item->order->fresh('items.product', 'customer'),
             'warning' => $exceedsMax
                 ? "{$item->product->name}: discount {$data['discount_percent']}% exceeds max allowed ({$item->product->max_discount_percent}%). Applied anyway — adjust if needed."
                 : null,
@@ -411,6 +411,15 @@ class POSController extends Controller
 
             $order->update([
                 'status' => 'completed',
+                // A held/draft order that gets completed and paid for is a
+                // real sale now, not a quotation/estimate anymore — reset
+                // this here so the printed invoice shows "INVOICE" instead
+                // of still saying "QUOTATION / ESTIMATE" (is_quotation was
+                // only ever set to true by Save as Draft/Quotation, the
+                // same button used to just hold an order for later, and
+                // was never cleared again once that order was resumed and
+                // actually completed).
+                'is_quotation' => false,
                 'payment_method' => $data['payment_method'],
                 'bank_name' => $data['bank_name'] ?? null,
                 'transaction_id' => $data['transaction_id'] ?? null,

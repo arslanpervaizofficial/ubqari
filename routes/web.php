@@ -78,6 +78,7 @@ Route::middleware('auth')->group(function () {
         Route::resource('customers', CustomerController::class)->except(['show', 'destroy']);
         Route::get('customers/{customer}/ledger', [CustomerController::class, 'ledger'])->name('customers.ledger');
         Route::post('customers/{customer}/payment', [CustomerController::class, 'recordPayment'])->name('customers.record-payment');
+        Route::patch('customers/{customer}/payment/{payment}', [CustomerController::class, 'updatePayment'])->name('customers.update-payment');
         Route::post('customers/{customer}/toggle-active', [CustomerController::class, 'toggleActive'])->name('customers.toggle-active');
 
         Route::resource('suppliers', SupplierController::class)->except(['show', 'destroy']);
@@ -146,6 +147,7 @@ Route::middleware('auth')->group(function () {
         Route::post('products/destroy-all', [ProductController::class, 'destroyAll'])->name('products.destroy-all');
 
         Route::delete('customers/{customer}', [CustomerController::class, 'destroy'])->name('customers.destroy');
+        Route::delete('customers/{customer}/payment/{payment}', [CustomerController::class, 'destroyPayment'])->name('customers.destroy-payment');
         Route::post('customers/destroy-selected', [CustomerController::class, 'destroySelected'])->name('customers.destroy-selected');
         Route::post('customers/destroy-all', [CustomerController::class, 'destroyAll'])->name('customers.destroy-all');
 

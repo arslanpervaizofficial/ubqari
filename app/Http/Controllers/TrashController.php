@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Customer;
+use App\Models\CustomerPayment;
 use App\Models\Expense;
 use App\Models\Order;
 use App\Models\PurchaseOrder;
@@ -24,6 +25,7 @@ class TrashController extends Controller
      *  Trash view hides those buttons for anyone else. */
     private const TYPES = [
         'customers' => ['model' => Customer::class, 'label' => 'Customers', 'roles' => ['admin', 'manager']],
+        'customer-payments' => ['model' => CustomerPayment::class, 'label' => 'Customer Ledger Entries', 'roles' => ['admin', 'manager']],
         'suppliers' => ['model' => Supplier::class, 'label' => 'Suppliers', 'roles' => ['admin', 'manager']],
         'orders' => ['model' => Order::class, 'label' => 'Sales Orders', 'roles' => ['admin', 'manager']],
         'purchase-orders' => ['model' => PurchaseOrder::class, 'label' => 'Purchase Orders', 'roles' => ['admin', 'manager']],
@@ -57,6 +59,7 @@ class TrashController extends Controller
             if ($slug === 'orders') $query->with('customer');
             if ($slug === 'purchase-orders') $query->with('supplier');
             if ($slug === 'stock-returns') $query->with('product', 'customer', 'supplier');
+            if ($slug === 'customer-payments') $query->with('customer', 'user');
             $trashed[$slug] = $query->get();
         }
         return view('trash.index', compact('types', 'trashed'));
@@ -94,6 +97,8 @@ class TrashController extends Controller
                     $item->restoreReceivedEffects();
                 } elseif ($item instanceof StockReturn) {
                     $item->restoreEffects();
+                } elseif ($item instanceof CustomerPayment) {
+                    $item->restoreEffect();
                 }
                 $item->restore();
             }
