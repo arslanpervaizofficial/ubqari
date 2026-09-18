@@ -142,7 +142,19 @@ class CustomerController extends Controller
     public function ledger(Customer $customer)
     {
         $orders = $customer->orders()->orderByDesc('created_at')->paginate(20);
+        // Full (unpaginated) order history — used only by the exported/
+        // shared PDF, which is meant to be a complete statement, not just
+        // whatever page of 20 happens to be showing on screen right now.
+        $allOrders = $customer->orders()->orderByDesc('created_at')->get();
         $payments = $customer->payments()->latest()->get();
+
+        // All-time summary (not just the current page of $orders) for the
+        // statement shown at the end of the exported/shared PDF.
+        $ledgerSummary = [
+            'total_billed' => (float) $customer->orders()->where('status', 'completed')->sum('total'),
+            'total_paid' => (float) $customer->orders()->where('status', 'completed')->sum('paid_amount'),
+            'total_due_from_orders' => (float) $customer->orders()->where('status', 'completed')->sum('due_amount'),
+        ];
 
         // 1. Monthly order graph — last 12 months, this customer's own
         // completed orders only (count + total, net of nothing extra —
@@ -197,13 +209,18 @@ class CustomerController extends Controller
             ->sortBy('last_ordered_at')
             ->take(8)
             ->map(function ($row) {
-                $row->days_since = now()->diffInDays($row->last_ordered_at);
+                // Carbon 3's diffInDays() can return a signed float (not a
+                // clean whole number) depending on time-of-day precision —
+                // that's the "-1.08...d ago" showing up instead of a plain
+                // integer. Force it through an explicit Carbon parse with
+                // absolute=true, then floor it to a whole number of days.
+                $row->days_since = (int) floor(\Carbon\Carbon::parse($row->last_ordered_at)->diffInDays(now(), true));
                 return $row;
             })
             ->values();
 
         return view('customers.ledger', compact(
-            'customer', 'orders', 'payments', 'monthlyOrders', 'topProducts', 'lapsedProducts'
+            'customer', 'orders', 'allOrders', 'payments', 'monthlyOrders', 'topProducts', 'lapsedProducts', 'ledgerSummary'
         ));
     }
 
