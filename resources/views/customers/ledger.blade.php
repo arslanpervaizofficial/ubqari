@@ -256,9 +256,33 @@
 </div>
 
 <style>
+    /* Kept outside @media print (unlike the display swap below) because
+       html2pdf.js/html2canvas — used by the "Share on WhatsApp" button —
+       renders the page in its normal on-screen context, not inside an
+       actual @media print context, so a rule scoped only to print would
+       be invisible to it. break-inside:avoid has no visible effect on
+       screen anyway, so applying it unconditionally is safe and keeps
+       both export paths breaking pages in the same places. */
+    #ledger-print-area > div {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+
     @media print {
         .ledger-screen-only { display: none !important; }
         .ledger-print-only { display: block !important; }
+
+        /* Proper breathing room on every edge of the printed/PDF page —
+           without this, content can end up flush against the physical
+           page edge (e.g. the closing "Total Balance Due" line looking
+           cut off at the very bottom), regardless of what margin the
+           browser's own print dialog happens to default to. */
+        @page { margin: 15mm 12mm; }
+
+        /* A little extra room after the very last block so the closing
+           balance line always has clear space below it instead of
+           sitting right at the page's bottom margin. */
+        #ledger-print-area > div:last-child { margin-bottom: 10mm; }
     }
 </style>
 
@@ -311,6 +335,7 @@ document.getElementById('ledger-whatsapp-btn').addEventListener('click', async f
         image: { type: 'jpeg', quality: 0.95 },
         html2canvas: { scale: 2, useCORS: true },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['css', 'avoid-all'] },
     };
 
     ledgerSetExportView(true);
