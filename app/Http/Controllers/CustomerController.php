@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\Customer;
 use App\Models\CustomerPayment;
+use App\Models\OrderItem;
+use App\Models\StockReturn;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -132,11 +134,77 @@ class CustomerController extends Controller
         return back()->with('status', "{$customer->name} {$label}.");
     }
 
+    /** Ledger page: this customer's order/payment history, plus three
+     *  charts scoped to just THIS customer (same idea as the Dashboard's
+     *  own graphs, but for one party instead of the whole shop) — how
+     *  their monthly buying has trended, what they buy most, and which of
+     *  their usual products they've gone quiet on. */
     public function ledger(Customer $customer)
     {
         $orders = $customer->orders()->orderByDesc('created_at')->paginate(20);
         $payments = $customer->payments()->latest()->get();
-        return view('customers.ledger', compact('customer', 'orders', 'payments'));
+
+        // 1. Monthly order graph — last 12 months, this customer's own
+        // completed orders only (count + total, net of nothing extra —
+        // this is what THEY were billed, same as the invoice they got).
+        $monthlyOrders = collect(range(11, 0))->map(function ($monthsAgo) use ($customer) {
+            $date = now()->subMonths($monthsAgo);
+            $scope = $customer->orders()->where('status', 'completed')
+                ->whereMonth('created_at', $date->month)
+                ->whereYear('created_at', $date->year);
+            return [
+                'label' => $date->format('M Y'),
+                'count' => $scope->count(),
+                'total' => (float) $scope->sum('total'),
+            ];
+        });
+
+        // 2. Top selling products for THIS customer — same qty-sold-net-
+        // of-returns approach as the Dashboard's Top Products, just
+        // scoped down to this one customer's completed orders.
+        $topProducts = OrderItem::select('product_id', DB::raw('SUM(quantity) as qty_sold'))
+            ->whereHas('order', fn ($q) => $q->where('customer_id', $customer->id)->where('status', 'completed'))
+            ->groupBy('product_id')
+            ->with('product')
+            ->get()
+            ->map(function ($row) use ($customer) {
+                $returned = StockReturn::where('product_id', $row->product_id)
+                    ->where('customer_id', $customer->id)
+                    ->where('type', 'from_customer')
+                    ->sum('quantity');
+                $row->qty_sold = max(0, $row->qty_sold - $returned);
+                return $row;
+            })
+            ->sortByDesc('qty_sold')
+            ->filter(fn ($row) => $row->qty_sold > 0)
+            ->take(8)
+            ->values();
+
+        // 3. Products this customer USED to buy but hasn't in a while —
+        // every product they've ever ordered (completed orders), sorted
+        // by how long it's been since the last time, most-overdue first.
+        // Meant as a reorder-reminder list for the salesperson, not a
+        // stock report — a brand-new customer with no history yet just
+        // sees an empty list here, which is correct.
+        $lapsedProducts = OrderItem::join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->where('orders.customer_id', $customer->id)
+            ->where('orders.status', 'completed')
+            ->groupBy('order_items.product_id')
+            ->select('order_items.product_id', DB::raw('MAX(orders.created_at) as last_ordered_at'), DB::raw('SUM(order_items.quantity) as total_qty'))
+            ->with('product')
+            ->get()
+            ->filter(fn ($row) => $row->product)
+            ->sortBy('last_ordered_at')
+            ->take(8)
+            ->map(function ($row) {
+                $row->days_since = now()->diffInDays($row->last_ordered_at);
+                return $row;
+            })
+            ->values();
+
+        return view('customers.ledger', compact(
+            'customer', 'orders', 'payments', 'monthlyOrders', 'topProducts', 'lapsedProducts'
+        ));
     }
 
     /** Record a standalone credit or debit against the customer's balance (no order involved).

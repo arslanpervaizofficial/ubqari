@@ -12,6 +12,47 @@
     @endif
 </p>
 
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6">
+    <div class="lg:col-span-2 bg-white rounded-xl shadow-sm p-5">
+        <h2 class="font-semibold text-gray-700 mb-3">Monthly Orders — Last 12 Months</h2>
+        @if($monthlyOrders->sum('count'))
+            <canvas id="monthlyOrdersChart" height="90"></canvas>
+        @else
+            <p class="text-gray-400 text-sm">No completed orders yet for this customer.</p>
+        @endif
+    </div>
+    <div class="bg-white rounded-xl shadow-sm p-5">
+        <h2 class="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+            <svg class="w-5 h-5 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"/></svg>
+            Top Products (This Customer)
+        </h2>
+        @if($topProducts->count())
+            <canvas id="customerTopProductsChart" height="140"></canvas>
+        @else
+            <p class="text-gray-400 text-sm">No completed orders yet.</p>
+        @endif
+    </div>
+</div>
+
+<div class="bg-white rounded-xl shadow-sm p-5 mb-6">
+    <h2 class="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+        <svg class="w-5 h-5 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        Products Not Ordered In A While
+    </h2>
+    @if($lapsedProducts->count())
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+            @foreach($lapsedProducts as $row)
+                <div class="text-sm rounded-lg px-3 py-2 flex justify-between items-center {{ $row->days_since >= 60 ? 'bg-red-50' : ($row->days_since >= 30 ? 'bg-yellow-50' : 'bg-gray-50') }}">
+                    <span>{{ $row->product->name ?? '—' }}</span>
+                    <span class="font-semibold {{ $row->days_since >= 60 ? 'text-red-600' : ($row->days_since >= 30 ? 'text-yellow-700' : 'text-gray-500') }}">{{ $row->days_since }}d ago</span>
+                </div>
+            @endforeach
+        </div>
+    @else
+        <p class="text-gray-400 text-sm">This customer has no order history yet.</p>
+    @endif
+</div>
+
 <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
     <h2 class="font-semibold mb-3">Record Credit/Debit (no order involved — payment received, a return, or a manual adjustment)</h2>
     <form method="POST" action="{{ route('customers.record-payment', $customer) }}" novalidate class="flex flex-wrap items-end gap-3">
@@ -141,5 +182,58 @@ document.addEventListener('click', function (e) {
 document.getElementById('edit-payment-modal-cancel')?.addEventListener('click', function () {
     document.getElementById('edit-payment-modal-overlay').classList.add('hidden');
 });
+
+@if($monthlyOrders->sum('count'))
+new Chart(document.getElementById('monthlyOrdersChart'), {
+    data: {
+        labels: {!! json_encode($monthlyOrders->pluck('label')) !!},
+        datasets: [
+            {
+                type: 'bar',
+                label: 'Total (Rs)',
+                data: {!! json_encode($monthlyOrders->pluck('total')) !!},
+                backgroundColor: '#3b82f6',
+                borderRadius: 6,
+                yAxisID: 'y',
+            },
+            {
+                type: 'line',
+                label: 'Orders',
+                data: {!! json_encode($monthlyOrders->pluck('count')) !!},
+                borderColor: '#c2703d',
+                backgroundColor: '#c2703d',
+                tension: 0.35,
+                yAxisID: 'y1',
+            },
+        ]
+    },
+    options: {
+        scales: {
+            y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Rs' } },
+            y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Orders' }, ticks: { precision: 0 } },
+        }
+    }
+});
+@endif
+
+@if($topProducts->count())
+new Chart(document.getElementById('customerTopProductsChart'), {
+    type: 'bar',
+    data: {
+        labels: {!! json_encode($topProducts->map(fn($p) => $p->product->name ?? '—')) !!},
+        datasets: [{
+            label: 'Qty Sold',
+            data: {!! json_encode($topProducts->pluck('qty_sold')) !!},
+            backgroundColor: '#c2703d',
+            borderRadius: 6,
+        }]
+    },
+    options: {
+        indexAxis: 'y',
+        plugins: { legend: { display: false } },
+        scales: { x: { beginAtZero: true } }
+    }
+});
+@endif
 </script>
 @endsection
