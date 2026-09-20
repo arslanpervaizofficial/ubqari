@@ -332,13 +332,18 @@ document.getElementById('ledger-whatsapp-btn').addEventListener('click', async f
 
     ledgerSetExportView(true);
     try {
-        // scrollX/scrollY/windowWidth/windowHeight pinned to the export
-        // area's own full size, computed AFTER switching to the export
-        // view above: without this, html2canvas defaults to the current
-        // scroll position and the browser's visible viewport height, so
-        // a statement taller than one screen only got the visible part
+        // scrollX/scrollY/windowHeight pinned to the export area's own
+        // full height, computed AFTER switching to the export view above:
+        // without this, html2canvas defaults to the current scroll
+        // position and the browser's visible viewport height, so a
+        // statement taller than one screen only got the visible part
         // captured — everything below that was silently cut off ("half
-        // PDF banti hai"), not a rendering failure.
+        // PDF banti hai"), not a rendering failure. Width is deliberately
+        // left at html2canvas's own default (the real window's width) —
+        // pinning it to the export area's own (narrower) width instead
+        // forces html2canvas to re-layout the ENTIRE page inside a
+        // simulated browser window that narrow, which can crop or
+        // misplace content that depends on the page's real width.
         const opt = {
             margin: 8,
             filename: filename,
@@ -348,7 +353,6 @@ document.getElementById('ledger-whatsapp-btn').addEventListener('click', async f
                 useCORS: true,
                 scrollX: 0,
                 scrollY: 0,
-                windowWidth: area.scrollWidth,
                 windowHeight: area.scrollHeight,
             },
             jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },

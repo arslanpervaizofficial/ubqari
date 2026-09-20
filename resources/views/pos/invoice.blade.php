@@ -113,7 +113,7 @@
         @endif
     </div>
 
-    <div class="mt-6 flex flex-wrap gap-2 print:hidden">
+    <div class="mt-6 flex flex-wrap gap-2 print:hidden" id="invoice-actions">
         <button id="print-a4-btn" class="bg-gray-900 text-white px-4 py-2 rounded">Print (A4)</button>
         <button id="print-thermal-btn" class="bg-gray-700 text-white px-4 py-2 rounded">Print (Thermal)</button>
         <button id="export-pdf-btn" class="bg-gray-200 px-4 py-2 rounded">
@@ -179,22 +179,30 @@ function buildInvoicePdfOpt() {
         margin: 6,
         filename: invoiceFilename,
         image: { type: 'jpeg', quality: 0.95 },
-        // scrollY/scrollX/windowHeight/windowWidth pinned to the actual
-        // element and a zero scroll offset: without these, html2canvas
-        // defaults to the CURRENT scroll position and the browser's
-        // visible viewport height — so if the invoice is taller than one
-        // screen (a long item list), only whatever was actually visible
-        // in the window at the moment of capture got rendered, and
-        // everything below that got cut off. That's what "half PDF banti
-        // hai" was: not a rendering failure, just html2canvas capturing a
-        // viewport-sized window instead of the full element.
         html2canvas: {
             scale: 2,
             useCORS: true,
             scrollX: 0,
             scrollY: 0,
-            windowWidth: card.scrollWidth,
+            // Only height needs overriding, to reach content below the
+            // fold on a long invoice (that was the "half PDF" bug) — width
+            // is deliberately left at html2canvas's own default (the
+            // real window's width). Pinning it to the card's own
+            // (narrower) width instead, like an earlier version of this
+            // did, forces html2canvas to re-layout the ENTIRE page inside
+            // a simulated browser window that narrow — which is exactly
+            // what pushed the header's left column (title/logo) out of
+            // frame and cropped the item table's leftmost columns in the
+            // last export.
             windowHeight: card.scrollHeight,
+            // The action buttons (Print/Export/WhatsApp/etc.) sit inside
+            // this same card so they lay out correctly on screen, hidden
+            // from real printing via `print:hidden` — but html2canvas
+            // doesn't run inside an actual print context, so that CSS
+            // rule is invisible to it and the buttons were rendering
+            // straight into the PDF. Explicitly skip that one element by
+            // id instead.
+            ignoreElements: (el) => el.id === 'invoice-actions',
         },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
         pagebreak: { mode: ['css', 'avoid-all'] },
