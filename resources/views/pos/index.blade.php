@@ -36,10 +36,11 @@
 
         <table class="w-full text-sm">
             <thead class="text-left border-b text-gray-500">
-                <tr><th class="py-2">Product</th><th>Qty</th><th>Price</th><th>Disc %</th><th>Line Total</th><th></th></tr>
+                <tr><th class="py-2">#</th><th>Product</th><th>Qty</th><th>Price</th><th>Disc %</th><th>Line Total</th><th></th></tr>
             </thead>
             <tbody id="cart-body"></tbody>
         </table>
+        <div class="text-right text-sm text-gray-500 mt-1" id="item-count-row">Total Items: <span id="item-count">0</span> product(s), <span id="unit-count">0</span> unit(s)</div>
 
         <div class="mt-4 border-t pt-4 flex flex-wrap justify-between items-end gap-4">
             <div class="flex gap-3">
@@ -166,14 +167,18 @@ function renderOrder(order) {
     tbody.innerHTML = '';
     // Newest item first (reversed), so whatever was just added/updated sits
     // right at the top next to the product search box — no scrolling down
-    // to reach its Quantity/Discount fields as the cart grows.
-    [...order.items].reverse().forEach(item => {
+    // to reach its Quantity/Discount fields as the cart grows. The Serial
+    // No. column numbers rows in this same top-to-bottom order shown on
+    // screen (1 at the top), not the order items were originally added in.
+    const itemsTopDown = [...order.items].reverse();
+    itemsTopDown.forEach((item, idx) => {
         const unit = item.product.unit;
         const step = isIntegerUnit(unit) ? '1' : '0.01';
         const tr = document.createElement('tr');
         tr.className = 'border-b';
         tr.dataset.itemId = item.id;
         tr.innerHTML = `
+            <td class="py-2 text-gray-400">${idx + 1}</td>
             <td class="py-2">${item.product.name}<br><span class="text-xs text-gray-400">${unit}</span></td>
             <td><input type="number" step="${step}" min="${step}" value="${item.quantity}" data-item-id="${item.id}" class="qty-input w-20 border rounded px-2 py-1"></td>
             <td>${Number(item.unit_price).toFixed(2)}</td>
@@ -182,6 +187,8 @@ function renderOrder(order) {
             <td><button class="remove-item text-red-600" data-item-id="${item.id}"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></button></td>`;
         tbody.appendChild(tr);
     });
+    document.getElementById('item-count').textContent = order.items.length;
+    document.getElementById('unit-count').textContent = order.items.reduce((sum, i) => sum + Number(i.quantity), 0);
     document.getElementById('subtotal').textContent = Number(order.subtotal).toFixed(2);
     document.getElementById('line-discount').textContent = Number(order.line_discount_total).toFixed(2);
     document.getElementById('discount').textContent = Number(order.discount_amount).toFixed(2);
@@ -259,20 +266,47 @@ document.getElementById('product-search').addEventListener('input', function (e)
 // Enter to pick the highlighted one. Selecting a product (this way or by
 // click) then moves focus straight to that row's Quantity field, since
 // that's virtually always the next thing typed.
-document.getElementById('product-search').addEventListener('keydown', function (e) {
+document.getElementById('product-search').addEventListener('keydown', async function (e) {
     const box = document.getElementById('search-results');
-    if (box.classList.contains('hidden') || !currentResults.length) return;
 
-    if (e.key === 'ArrowDown') {
+    if (e.key === 'ArrowDown' && !box.classList.contains('hidden') && currentResults.length) {
         e.preventDefault();
         highlightResult(Math.min(highlightedIndex + 1, currentResults.length - 1));
-    } else if (e.key === 'ArrowUp') {
+    } else if (e.key === 'ArrowUp' && !box.classList.contains('hidden') && currentResults.length) {
         e.preventDefault();
         highlightResult(Math.max(highlightedIndex - 1, 0));
     } else if (e.key === 'Enter') {
         e.preventDefault();
-        const pick = highlightedIndex >= 0 ? currentResults[highlightedIndex] : currentResults[0];
-        if (pick) addProduct(pick.id);
+        const q = e.target.value.trim();
+        if (!q) return;
+
+        // The common case: the debounced background search already came
+        // back and the dropdown is showing — just use it, no extra request.
+        if (!box.classList.contains('hidden') && currentResults.length) {
+            const pick = highlightedIndex >= 0 ? currentResults[highlightedIndex] : currentResults[0];
+            if (pick) addProduct(pick.id);
+            return;
+        }
+
+        // Otherwise the 250ms debounce simply hasn't resolved yet — this
+        // is the normal case for a barcode scanner (which types the whole
+        // code AND sends Enter within a few milliseconds) or anyone who
+        // types fast and hits Enter right away. Cancel the pending
+        // debounce and search right now instead of leaving Enter to do
+        // nothing (which is exactly what "enter karne pay search field
+        // pay hi rehta hai" was — the dropdown just hadn't populated in
+        // time yet, so this handler used to bail out with nothing to
+        // pick from).
+        clearTimeout(searchTimeout);
+        try {
+            const res = await fetch(`{{ route('pos.product-search') }}?q=${encodeURIComponent(q)}`, { headers: { 'Accept': 'application/json' } });
+            const products = await res.json();
+            if (products.length) {
+                addProduct(products[0].id);
+            } else {
+                uiAlert('No product found for "' + q + '"', '⚠️');
+            }
+        } catch (err) { console.error(err); }
     } else if (e.key === 'Escape') {
         box.classList.add('hidden');
         highlightedIndex = -1;
@@ -367,6 +401,7 @@ document.getElementById('cart-body').addEventListener('change', async function (
         document.getElementById('line-discount').textContent = Number(data.order.line_discount_total).toFixed(2);
         document.getElementById('discount').textContent = Number(data.order.discount_amount).toFixed(2);
         document.getElementById('total').textContent = Number(data.order.total).toFixed(2);
+        document.getElementById('unit-count').textContent = data.order.items.reduce((sum, i) => sum + Number(i.quantity), 0);
         const paidInput = document.querySelector('#checkout-modal input[name="paid_amount"]');
         if (paidInput) paidInput.value = data.order.total;
     } catch (err) { uiAlert(err.message, "⚠️"); }
