@@ -51,6 +51,7 @@
         body.thermal-print #invoice-card table td:nth-child(2) { width: 38% !important; }
         body.thermal-print #invoice-card .text-lg { font-size: 14px !important; }
         body.thermal-print #invoice-card .space-y-1 > div { margin-bottom: 2px !important; }
+        body.thermal-print #invoice-card .text-xs { font-size: 10px !important; }
     }
 </style>
 
@@ -83,6 +84,7 @@
         @endforeach
         </tbody>
     </table>
+    <p class="text-xs text-gray-500 mb-4">Total Items: {{ $order->items->count() }} product(s), {{ $order->items->sum('quantity') }} unit(s)</p>
 
     <div class="text-right text-sm space-y-1">
         <div>Subtotal: {{ number_format($order->subtotal, 2) }}</div>
@@ -143,6 +145,27 @@ document.getElementById('print-a4-btn').addEventListener('click', function () {
 });
 document.getElementById('print-thermal-btn').addEventListener('click', function () {
     document.body.classList.add('thermal-print');
+    // `@page { size: 76mm auto; }` (in the <style> block above) asks the
+    // browser to make the page exactly as tall as the content — but
+    // "auto" height on a continuous-roll page size isn't reliably honored
+    // by every browser/print driver; some cap it at a fixed maximum, which
+    // is exactly what "aik maximum limit tak print ata, baaki blank rehta,
+    // extra page use hoti" was: anything past that cap spilled onto a
+    // second page, with the rest of the first page sitting empty. Setting
+    // an EXPLICIT height computed from the actual content, right before
+    // printing, replaces "auto" with a real number the driver can't
+    // second-guess. Appended to the end of <body> (after the static
+    // <style> block above) so it wins the normal CSS cascade for the same
+    // `@page` selector — no special-case override syntax needed.
+    const card = document.getElementById('invoice-card');
+    const heightMm = Math.ceil(card.scrollHeight * 25.4 / 96) + 6;
+    let pageSizeStyle = document.getElementById('thermal-page-size-style');
+    if (!pageSizeStyle) {
+        pageSizeStyle = document.createElement('style');
+        pageSizeStyle.id = 'thermal-page-size-style';
+        document.body.appendChild(pageSizeStyle);
+    }
+    pageSizeStyle.textContent = `@media print { @page { size: 76mm ${heightMm}mm; margin: 0; } }`;
     window.print();
 });
 window.addEventListener('afterprint', function () {
@@ -150,14 +173,33 @@ window.addEventListener('afterprint', function () {
 });
 
 const invoiceFilename = {!! json_encode($order->order_number . '.pdf') !!};
-const invoicePdfOpt = {
-    margin: 6,
-    filename: invoiceFilename,
-    image: { type: 'jpeg', quality: 0.95 },
-    html2canvas: { scale: 2, useCORS: true },
-    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-    pagebreak: { mode: ['css', 'avoid-all'] },
-};
+function buildInvoicePdfOpt() {
+    const card = document.getElementById('invoice-card');
+    return {
+        margin: 6,
+        filename: invoiceFilename,
+        image: { type: 'jpeg', quality: 0.95 },
+        // scrollY/scrollX/windowHeight/windowWidth pinned to the actual
+        // element and a zero scroll offset: without these, html2canvas
+        // defaults to the CURRENT scroll position and the browser's
+        // visible viewport height — so if the invoice is taller than one
+        // screen (a long item list), only whatever was actually visible
+        // in the window at the moment of capture got rendered, and
+        // everything below that got cut off. That's what "half PDF banti
+        // hai" was: not a rendering failure, just html2canvas capturing a
+        // viewport-sized window instead of the full element.
+        html2canvas: {
+            scale: 2,
+            useCORS: true,
+            scrollX: 0,
+            scrollY: 0,
+            windowWidth: card.scrollWidth,
+            windowHeight: card.scrollHeight,
+        },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['css', 'avoid-all'] },
+    };
+}
 
 document.getElementById('export-pdf-btn').addEventListener('click', async function () {
     const btn = this;
@@ -165,7 +207,7 @@ document.getElementById('export-pdf-btn').addEventListener('click', async functi
     btn.disabled = true;
     btn.textContent = 'Preparing PDF...';
     try {
-        await html2pdf().set(invoicePdfOpt).from(document.getElementById('invoice-card')).save();
+        await html2pdf().set(buildInvoicePdfOpt()).from(document.getElementById('invoice-card')).save();
     } catch (err) {
         alert('Could not generate PDF: ' + err.message);
     } finally {
@@ -180,7 +222,7 @@ document.getElementById('whatsapp-pdf-btn').addEventListener('click', async func
     btn.disabled = true;
     btn.textContent = 'Preparing PDF...';
     try {
-        const worker = html2pdf().set(invoicePdfOpt).from(document.getElementById('invoice-card'));
+        const worker = html2pdf().set(buildInvoicePdfOpt()).from(document.getElementById('invoice-card'));
         const pdfBlob = await worker.outputPdf('blob');
         const file = new File([pdfBlob], invoiceFilename, { type: 'application/pdf' });
 
@@ -196,7 +238,7 @@ document.getElementById('whatsapp-pdf-btn').addEventListener('click', async func
             // limitation, not something a site can route around. Same PDF
             // either way: it just downloads first, then WhatsApp opens
             // with a message ready so it's one more "attach" tap to send.
-            await html2pdf().set(invoicePdfOpt).from(document.getElementById('invoice-card')).save();
+            await html2pdf().set(buildInvoicePdfOpt()).from(document.getElementById('invoice-card')).save();
             const msg = encodeURIComponent('Invoice ' + {!! json_encode($order->order_number) !!} + ' — PDF just downloaded, please attach it here.');
             window.open('https://wa.me/?text=' + msg, '_blank');
         }

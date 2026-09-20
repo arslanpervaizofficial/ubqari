@@ -140,6 +140,12 @@
 </div>
 
 <script>
+// Version marker — if this exact string is NOT visible in the browser
+// console after a hard refresh, the browser is still running an OLDER
+// deployed copy of this file, not this one. Check this FIRST before
+// assuming any bug below is still present.
+console.log('POS billing JS — build 2026-09-20-b (Enter-to-Quantity-to-Discount focus fix)');
+
 const csrf = document.querySelector('meta[name="csrf-token"]').content;
 const INTEGER_UNITS = ['piece','pcs','dozen','box','pack','carton','unit'];
 function isIntegerUnit(unit) { return INTEGER_UNITS.includes((unit||'').toLowerCase()); }
@@ -261,57 +267,72 @@ document.getElementById('product-search').addEventListener('input', function (e)
     }, 250);
 });
 
-// Lets the whole "find a product" step happen without ever touching the
-// mouse: type to search, Arrow Up/Down to move through the suggestions,
-// Enter to pick the highlighted one. Selecting a product (this way or by
-// click) then moves focus straight to that row's Quantity field, since
-// that's virtually always the next thing typed.
-document.getElementById('product-search').addEventListener('keydown', async function (e) {
+// One single, top-level keydown listener for the whole billing flow —
+// attached to `document` with `capture: true` (the 4th argument below),
+// so it runs BEFORE the event has a chance to bubble through anything
+// else in the page that might call stopPropagation() on the way up.
+// Handles two things: arrow-key navigation + Enter-to-pick on the
+// product search box, and Enter-to-advance (Qty → Discount → back to
+// search) within a cart row — the whole add-a-line workflow, never
+// needing the mouse.
+document.addEventListener('keydown', async function (e) {
+    if (e.key !== 'Enter' && e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Escape') return;
+
+    const searchInput = document.getElementById('product-search');
     const box = document.getElementById('search-results');
 
-    if (e.key === 'ArrowDown' && !box.classList.contains('hidden') && currentResults.length) {
-        e.preventDefault();
-        highlightResult(Math.min(highlightedIndex + 1, currentResults.length - 1));
-    } else if (e.key === 'ArrowUp' && !box.classList.contains('hidden') && currentResults.length) {
-        e.preventDefault();
-        highlightResult(Math.max(highlightedIndex - 1, 0));
-    } else if (e.key === 'Enter') {
-        e.preventDefault();
-        const q = e.target.value.trim();
-        if (!q) return;
+    if (e.target === searchInput) {
+        if (e.key === 'ArrowDown' && !box.classList.contains('hidden') && currentResults.length) {
+            e.preventDefault();
+            highlightResult(Math.min(highlightedIndex + 1, currentResults.length - 1));
+        } else if (e.key === 'ArrowUp' && !box.classList.contains('hidden') && currentResults.length) {
+            e.preventDefault();
+            highlightResult(Math.max(highlightedIndex - 1, 0));
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            const q = e.target.value.trim();
+            if (!q) return;
 
-        // The common case: the debounced background search already came
-        // back and the dropdown is showing — just use it, no extra request.
-        if (!box.classList.contains('hidden') && currentResults.length) {
-            const pick = highlightedIndex >= 0 ? currentResults[highlightedIndex] : currentResults[0];
-            if (pick) addProduct(pick.id);
-            return;
-        }
-
-        // Otherwise the 250ms debounce simply hasn't resolved yet — this
-        // is the normal case for a barcode scanner (which types the whole
-        // code AND sends Enter within a few milliseconds) or anyone who
-        // types fast and hits Enter right away. Cancel the pending
-        // debounce and search right now instead of leaving Enter to do
-        // nothing (which is exactly what "enter karne pay search field
-        // pay hi rehta hai" was — the dropdown just hadn't populated in
-        // time yet, so this handler used to bail out with nothing to
-        // pick from).
-        clearTimeout(searchTimeout);
-        try {
-            const res = await fetch(`{{ route('pos.product-search') }}?q=${encodeURIComponent(q)}`, { headers: { 'Accept': 'application/json' } });
-            const products = await res.json();
-            if (products.length) {
-                addProduct(products[0].id);
-            } else {
-                uiAlert('No product found for "' + q + '"', '⚠️');
+            // The common case: the debounced background search already
+            // came back and the dropdown is showing — just use it.
+            if (!box.classList.contains('hidden') && currentResults.length) {
+                const pick = highlightedIndex >= 0 ? currentResults[highlightedIndex] : currentResults[0];
+                if (pick) addProduct(pick.id);
+                return;
             }
-        } catch (err) { console.error(err); }
-    } else if (e.key === 'Escape') {
-        box.classList.add('hidden');
-        highlightedIndex = -1;
+
+            // Otherwise the 250ms debounce simply hasn't resolved yet —
+            // normal for a barcode scanner (types the whole code AND
+            // sends Enter within a few milliseconds) or fast typing.
+            // Cancel the pending debounce and search right now instead
+            // of leaving Enter to do nothing.
+            clearTimeout(searchTimeout);
+            try {
+                const res = await fetch(`{{ route('pos.product-search') }}?q=${encodeURIComponent(q)}`, { headers: { 'Accept': 'application/json' } });
+                const products = await res.json();
+                if (products.length) {
+                    addProduct(products[0].id);
+                } else {
+                    uiAlert('No product found for "' + q + '"', '⚠️');
+                }
+            } catch (err) { console.error(err); }
+        } else if (e.key === 'Escape') {
+            box.classList.add('hidden');
+            highlightedIndex = -1;
+        }
+        return;
     }
-});
+
+    if (e.key !== 'Enter') return;
+    if (e.target.classList.contains('qty-input')) {
+        e.preventDefault();
+        const discInput = e.target.closest('tr')?.querySelector('.disc-input');
+        if (discInput) { discInput.focus(); discInput.select(); }
+    } else if (e.target.classList.contains('disc-input')) {
+        e.preventDefault();
+        searchInput.focus();
+    }
+}, true);
 
 async function addProduct(productId) {
     try {
@@ -347,22 +368,6 @@ async function addProduct(productId) {
         }, 0);
     } catch (err) { uiAlert(err.message, "⚠️"); }
 }
-
-// Enter acts like Tab within a cart row (Qty → Discount), and like
-// "confirm and start the next item" from Discount (→ back to product
-// search) — the full add-a-line workflow never needs the mouse.
-document.getElementById('cart-body').addEventListener('keydown', function (e) {
-    if (e.key !== 'Enter') return;
-    const target = e.target;
-    if (target.classList.contains('qty-input')) {
-        e.preventDefault();
-        const discInput = target.closest('tr')?.querySelector('.disc-input');
-        if (discInput) { discInput.focus(); discInput.select(); }
-    } else if (target.classList.contains('disc-input')) {
-        e.preventDefault();
-        document.getElementById('product-search').focus();
-    }
-});
 
 document.getElementById('cart-body').addEventListener('change', async function (e) {
     const itemId = e.target.dataset.itemId;

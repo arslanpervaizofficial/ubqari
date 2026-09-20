@@ -329,17 +329,32 @@ document.getElementById('ledger-whatsapp-btn').addEventListener('click', async f
 
     const area = document.getElementById('ledger-print-area');
     const filename = {!! json_encode(\Illuminate\Support\Str::slug($customer->name) . '-ledger.pdf') !!};
-    const opt = {
-        margin: 8,
-        filename: filename,
-        image: { type: 'jpeg', quality: 0.95 },
-        html2canvas: { scale: 2, useCORS: true },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-        pagebreak: { mode: ['css', 'avoid-all'] },
-    };
 
     ledgerSetExportView(true);
     try {
+        // scrollX/scrollY/windowWidth/windowHeight pinned to the export
+        // area's own full size, computed AFTER switching to the export
+        // view above: without this, html2canvas defaults to the current
+        // scroll position and the browser's visible viewport height, so
+        // a statement taller than one screen only got the visible part
+        // captured — everything below that was silently cut off ("half
+        // PDF banti hai"), not a rendering failure.
+        const opt = {
+            margin: 8,
+            filename: filename,
+            image: { type: 'jpeg', quality: 0.95 },
+            html2canvas: {
+                scale: 2,
+                useCORS: true,
+                scrollX: 0,
+                scrollY: 0,
+                windowWidth: area.scrollWidth,
+                windowHeight: area.scrollHeight,
+            },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            pagebreak: { mode: ['css', 'avoid-all'] },
+        };
+
         const worker = html2pdf().set(opt).from(area);
         const pdfBlob = await worker.outputPdf('blob');
         const file = new File([pdfBlob], filename, { type: 'application/pdf' });
