@@ -141,11 +141,17 @@ class CustomerController extends Controller
      *  their usual products they've gone quiet on. */
     public function ledger(Customer $customer)
     {
-        $orders = $customer->orders()->orderByDesc('created_at')->paginate(20);
+        // A cancelled order never actually happened — nothing was sold,
+        // nothing was paid, no stock moved — so it doesn't belong on a
+        // customer's own statement of what they've bought. Scoping to
+        // 'completed' here (rather than showing every status) is what
+        // keeps a cancelled/deleted-then-restored order from showing up
+        // here as if it were a real transaction.
+        $orders = $customer->orders()->where('status', 'completed')->orderByDesc('created_at')->paginate(20);
         // Full (unpaginated) order history — used only by the exported/
         // shared PDF, which is meant to be a complete statement, not just
         // whatever page of 20 happens to be showing on screen right now.
-        $allOrders = $customer->orders()->orderByDesc('created_at')->get();
+        $allOrders = $customer->orders()->where('status', 'completed')->orderByDesc('created_at')->get();
         $payments = $customer->payments()->latest()->get();
 
         // All-time summary (not just the current page of $orders) for the

@@ -33,7 +33,7 @@
     <div class="text-right text-lg font-bold mb-6">Total: {{ number_format($order->total, 2) }}</div>
 
     <div class="flex justify-end gap-2">
-        <form method="POST" action="{{ route('pos.cancel', $order) }}" class="confirm-submit" data-confirm-message="Delete this held order? This cannot be undone.">
+        <form method="POST" action="{{ route('pos.cancel', $order) }}" class="confirm-submit" data-confirm-message="Move this held order to Trash? You can restore it later from Trash.">
             @csrf
             <button class="btn btn-red">Delete</button>
         </form>

@@ -24,7 +24,7 @@
                     @csrf
                     <button class="btn btn-solid-yellow">Resume</button>
                 </form>
-                <form method="POST" action="{{ route('pos.cancel', $h) }}" class="inline confirm-submit" data-confirm-message="Delete this held order? This cannot be undone.">
+                <form method="POST" action="{{ route('pos.cancel', $h) }}" class="inline confirm-submit" data-confirm-message="Move this held order to Trash? You can restore it later from Trash.">
                     @csrf
                     <button class="btn btn-red">Delete</button>
                 </form>

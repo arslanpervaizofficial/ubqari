@@ -449,13 +449,25 @@ class POSController extends Controller
         return redirect()->route('pos.invoice', $order)->with('status', 'Saved as quotation/draft.');
     }
 
+    /** "Delete" on a Held Order — it was never completed (no stock
+     *  deducted, no payment recorded), so there's nothing to reverse; just
+     *  move it to Trash like every other deletable record in the app.
+     *  This used to instead set status='cancelled' and leave the row in
+     *  place permanently — with no stock/ledger effects to undo that was
+     *  harmless in itself, but it left the order in a dead-end state: not
+     *  in Held Orders anymore, not completed, and with no Delete button
+     *  available on the main Orders list either (that page only shows
+     *  Update/Delete for 'completed' rows) — so it just sat there
+     *  forever with no way to get rid of it, and still showed up in a
+     *  customer's Ledger order history despite representing a sale that
+     *  never actually happened. */
     public function cancel(Request $request, Order $order)
     {
-        $order->update(['status' => 'cancelled']);
+        $order->delete();
         if ($request->session()->get('current_order_id') == $order->id) {
             $request->session()->forget('current_order_id');
         }
-        return redirect()->route('pos.held-index')->with('status', 'Order deleted.');
+        return redirect()->route('pos.held-index')->with('status', 'Held order moved to Trash.');
     }
 
     public function invoice(Order $order)

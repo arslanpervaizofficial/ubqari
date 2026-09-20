@@ -65,7 +65,7 @@
     <tbody>
     @forelse($orders as $o)
         <tr class="border-t">
-            @if(auth()->user()->role === 'admin')<td class="p-3">@if($o->status === 'completed')<input type="checkbox" data-bulk-item="orders" value="{{ $o->id }}">@endif</td>@endif
+            @if(auth()->user()->role === 'admin')<td class="p-3">@if(in_array($o->status, ['completed', 'cancelled']))<input type="checkbox" data-bulk-item="orders" value="{{ $o->id }}">@endif</td>@endif
             <td class="p-3 font-medium">{{ $o->order_number }}</td>
             <td class="p-3">{{ $o->created_at->format('Y-m-d H:i') }}</td>
             <td class="p-3">{{ $o->customer->name ?? 'Walk-in' }}</td>
@@ -82,11 +82,11 @@
                     @csrf
                     <button class="btn btn-blue">Update</button>
                 </form>
-                @if(auth()->user()->role === 'admin')
+                @endif
+                @if(auth()->user()->role === 'admin' && in_array($o->status, ['completed', 'cancelled']))
                 <form method="POST" action="{{ route('orders.destroy', $o) }}" class="inline confirm-submit" data-confirm-message="Move order {{ $o->order_number }} to Trash? Stock and customer balance will be recounted automatically.">
                     @csrf @method('DELETE')<button class="btn btn-red">Delete</button>
                 </form>
-                @endif
                 @endif
             </td>
         </tr>
