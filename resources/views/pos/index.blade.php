@@ -326,14 +326,25 @@ async function addProduct(productId) {
         // Focus the Quantity field of whichever row this product ended up
         // on — a brand new row if it wasn't in the cart yet, or the
         // existing row (now with an incremented quantity) if it was.
+        // Wrapped in setTimeout(..., 0): renderOrder() just wiped and
+        // rebuilt the entire <tbody> via innerHTML — calling .focus() on a
+        // freshly-created element in that SAME synchronous tick doesn't
+        // reliably stick in every browser (especially right after the
+        // previously-focused element was itself just destroyed by that
+        // innerHTML wipe). Deferring one tick, after the browser has fully
+        // settled the DOM update, is what actually makes it reliable —
+        // this was the real cause of "product adds fine, focus just never
+        // moves," not a missing/broken selector.
         const addedItem = data.order.items.find(i => i.product_id === productId);
-        const qtyInput = addedItem ? document.querySelector(`.qty-input[data-item-id="${addedItem.id}"]`) : null;
-        if (qtyInput) {
-            qtyInput.focus();
-            qtyInput.select();
-        } else {
-            document.getElementById('product-search').focus();
-        }
+        setTimeout(() => {
+            const qtyInput = addedItem ? document.querySelector(`.qty-input[data-item-id="${addedItem.id}"]`) : null;
+            if (qtyInput) {
+                qtyInput.focus();
+                qtyInput.select();
+            } else {
+                document.getElementById('product-search').focus();
+            }
+        }, 0);
     } catch (err) { uiAlert(err.message, "⚠️"); }
 }
 
