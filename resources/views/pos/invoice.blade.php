@@ -23,7 +23,20 @@
      * content against it. */
     @media print {
         @page { size: 76mm auto; margin: 0; }
+    }
+    /* NOT wrapped in @media print on purpose: the thermal print button
+       adds the thermal-print class, then MEASURES the card's height to
+       size the page. That measurement happens on screen, so these rules
+       must apply on screen too — otherwise the card is measured at its
+       wide A4-ish layout (short) and printed at 72mm width (taller, text
+       wraps more), so the page is too short and the tail of the bill
+       spills onto a 2nd slip. The class is only present during printing
+       (removed again on afterprint). */
         body.thermal-print { margin: 0; }
+        body.thermal-print, body.thermal-print .min-h-screen { min-height: 0 !important; height: auto !important; }
+        body.thermal-print main { overflow: visible !important; padding: 0 !important; }
+        body.thermal-print #invoice-actions { display: none !important; }
+        body.thermal-print #invoice-card { break-inside: avoid !important; page-break-inside: avoid !important; }
         body.thermal-print #invoice-card {
             box-sizing: border-box !important;
             max-width: 72mm !important;
@@ -52,7 +65,6 @@
         body.thermal-print #invoice-card .text-lg { font-size: 14px !important; }
         body.thermal-print #invoice-card .space-y-1 > div { margin-bottom: 2px !important; }
         body.thermal-print #invoice-card .text-xs { font-size: 10px !important; }
-    }
 </style>
 
 <div id="invoice-card" class="max-w-2xl mx-auto bg-white p-6 rounded-xl shadow-sm">
@@ -96,19 +108,19 @@
         @if($order->bank_name || $order->transaction_id)
             <div class="text-gray-500">{{ $order->bank_name }} @if($order->transaction_id) · Txn: {{ $order->transaction_id }} @endif</div>
         @endif
-        <div>Due (this order): {{ number_format($order->due_amount, 2) }}</div>
+        <div>{{ $order->due_amount < 0 ? 'Advance (this order)' : 'Due (this order)' }}: {{ number_format($order->due_amount, 2) }}</div>
         @php
-            // customer->credit_balance already has THIS order's due_amount
-            // folded into it (added at checkout), so subtracting it back
-            // out isolates whatever was still owed from earlier, separate
-            // orders — the two are shown separately, then summed, so the
-            // customer sees exactly what they now owe in total, not just
-            // what this one transaction added.
-            $previousDue = $order->customer ? max(0, $order->customer->credit_balance - $order->due_amount) : 0;
+            // customer->credit_balance already has THIS order's (signed)
+            // due_amount folded into it, so subtracting it back out
+            // isolates what was owed (or held in advance) beforehand.
+            $balanceNow = $order->customer ? (float) $order->customer->credit_balance : 0;
+            $previousBal = $order->customer ? round($balanceNow - $order->due_amount, 2) : 0;
         @endphp
-        @if($order->customer && $previousDue > 0)
-        <div class="border-t pt-1 mt-1">Previous Balance Due: {{ number_format($previousDue, 2) }}</div>
-        <div class="font-bold text-lg text-red-600">Total Amount Due Now: {{ number_format($order->due_amount + $previousDue, 2) }}</div>
+        @if($order->customer && abs($previousBal) > 0.004)
+        <div class="border-t pt-1 mt-1">{{ $previousBal > 0 ? 'Previous Balance Due' : 'Previous Advance' }}: {{ number_format(abs($previousBal), 2) }}</div>
+        @endif
+        @if($order->customer && abs($balanceNow) > 0.004 && abs($previousBal) > 0.004)
+        <div class="font-bold text-lg {{ $balanceNow > 0 ? 'text-red-600' : 'text-blue-700' }}">{{ $balanceNow > 0 ? 'Total Amount Due Now' : 'Advance/Credit Balance' }}: {{ number_format(abs($balanceNow), 2) }}</div>
         @endif
         @endif
     </div>
@@ -157,16 +169,22 @@ document.getElementById('print-thermal-btn').addEventListener('click', function 
     // second-guess. Appended to the end of <body> (after the static
     // <style> block above) so it wins the normal CSS cascade for the same
     // `@page` selector — no special-case override syntax needed.
+    // Wait for the thermal layout (72mm width) to actually apply, THEN
+    // measure — measuring before it applied is what made the page too
+    // short and pushed the bottom of the bill onto a second slip.
     const card = document.getElementById('invoice-card');
-    const heightMm = Math.ceil(card.scrollHeight * 25.4 / 96) + 6;
-    let pageSizeStyle = document.getElementById('thermal-page-size-style');
-    if (!pageSizeStyle) {
-        pageSizeStyle = document.createElement('style');
-        pageSizeStyle.id = 'thermal-page-size-style';
-        document.body.appendChild(pageSizeStyle);
-    }
-    pageSizeStyle.textContent = `@media print { @page { size: 76mm ${heightMm}mm; margin: 0; } }`;
-    window.print();
+    void card.offsetHeight; // force reflow
+    setTimeout(function () {
+        const heightMm = Math.ceil(card.getBoundingClientRect().height * 25.4 / 96) + 10;
+        let pageSizeStyle = document.getElementById('thermal-page-size-style');
+        if (!pageSizeStyle) {
+            pageSizeStyle = document.createElement('style');
+            pageSizeStyle.id = 'thermal-page-size-style';
+            document.body.appendChild(pageSizeStyle);
+        }
+        pageSizeStyle.textContent = `@media print { @page { size: 76mm ${heightMm}mm; margin: 0; } }`;
+        window.print();
+    }, 150);
 });
 window.addEventListener('afterprint', function () {
     document.body.classList.remove('thermal-print');

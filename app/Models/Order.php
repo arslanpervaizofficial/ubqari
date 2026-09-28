@@ -69,7 +69,9 @@ class Order extends Model
 
         StockMovement::where('order_id', $this->id)->where('type', 'sale')->delete();
 
-        if ($this->customer_id && $this->due_amount > 0) {
+        // due_amount is signed for named customers (negative = they overpaid
+        // and were carrying an advance), so any non-zero value is reversed.
+        if ($this->customer_id && abs($this->due_amount) > 0.004) {
             $this->customer()->decrement('credit_balance', $this->due_amount);
         }
     }
@@ -97,7 +99,7 @@ class Order extends Model
             ]);
         }
 
-        if ($this->customer_id && $this->due_amount > 0) {
+        if ($this->customer_id && abs($this->due_amount) > 0.004) {
             $this->customer()->increment('credit_balance', $this->due_amount);
         }
     }

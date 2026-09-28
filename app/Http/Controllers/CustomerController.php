@@ -154,13 +154,11 @@ class CustomerController extends Controller
         $allOrders = $customer->orders()->where('status', 'completed')->orderByDesc('created_at')->get();
         $payments = $customer->payments()->latest()->get();
 
-        // All-time summary (not just the current page of $orders) for the
-        // statement shown at the end of the exported/shared PDF.
-        $ledgerSummary = [
-            'total_billed' => (float) $customer->orders()->where('status', 'completed')->sum('total'),
-            'total_paid' => (float) $customer->orders()->where('status', 'completed')->sum('paid_amount'),
-            'total_due_from_orders' => (float) $customer->orders()->where('status', 'completed')->sum('due_amount'),
-        ];
+        // All-time summary — see Customer::ledgerFigures() for the formula.
+        // syncBalance() also repairs the stored credit_balance if it ever
+        // drifted from that formula (e.g. old overpayments that were never
+        // recorded), so the page header, summary and customer list agree.
+        $ledgerSummary = $customer->syncBalance();
 
         // 1. Monthly order graph — last 12 months, this customer's own
         // completed orders only (count + total, net of nothing extra —

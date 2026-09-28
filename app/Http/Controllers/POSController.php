@@ -407,7 +407,15 @@ class POSController extends Controller
                 ? (float) ($data['cash_amount'] ?? 0) + (float) ($data['bank_amount'] ?? 0)
                 : (float) ($data['paid_amount'] ?? $order->total);
 
-            $due = max(0, $order->total - $paid);
+            // Named customer: due is SIGNED — if they hand over more than the
+            // bill (e.g. 25,000 against 24,476), the extra (-524) is kept as
+            // a negative due/advance on their account instead of being
+            // silently thrown away by max(0, ...). Walk-in (no customer)
+            // has no account to hold an advance on, so the extra is just
+            // change handed back and due stays at 0.
+            $due = $order->customer_id
+                ? round($order->total - $paid, 2)
+                : max(0, round($order->total - $paid, 2));
 
             $order->update([
                 'status' => 'completed',
@@ -431,7 +439,7 @@ class POSController extends Controller
                 'original_completed_at' => $order->original_completed_at ?? now(),
             ]);
 
-            if ($order->customer_id && $due > 0) {
+            if ($order->customer_id && abs($due) > 0.004) {
                 $order->customer()->increment('credit_balance', $due);
             }
         });

@@ -89,7 +89,8 @@
                 <td class="p-3">{{ $o->created_at->format('Y-m-d') }}</td>
                 <td class="p-3">{{ number_format($o->total,2) }}</td>
                 <td class="p-3">{{ number_format($o->paid_amount,2) }}</td>
-                <td class="p-3">{{ number_format($o->due_amount,2) }}</td>
+                @php($rowDue = round($o->total - $o->paid_amount, 2))
+                <td class="p-3 {{ $rowDue < 0 ? 'text-blue-700 font-semibold' : '' }}">{{ number_format($rowDue,2) }}@if($rowDue < 0) <span class="text-xs">(advance)</span>@endif</td>
                 <td class="p-3">{{ $o->status }}</td>
             </tr>
         @empty
@@ -113,7 +114,8 @@
                 <td class="p-3">{{ $o->created_at->format('Y-m-d') }}</td>
                 <td class="p-3">{{ number_format($o->total,2) }}</td>
                 <td class="p-3">{{ number_format($o->paid_amount,2) }}</td>
-                <td class="p-3">{{ number_format($o->due_amount,2) }}</td>
+                @php($rowDue = round($o->total - $o->paid_amount, 2))
+                <td class="p-3 {{ $rowDue < 0 ? 'text-blue-700 font-semibold' : '' }}">{{ number_format($rowDue,2) }}@if($rowDue < 0) <span class="text-xs">(advance)</span>@endif</td>
                 <td class="p-3">{{ $o->status }}</td>
             </tr>
         @empty
@@ -187,10 +189,15 @@
     <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 {{ $customer->credit_balance > 0 ? 'border-red-500' : ($customer->credit_balance < 0 ? 'border-blue-500' : 'border-green-500') }}">
         <h2 class="font-semibold text-gray-700 mb-3">Statement Summary</h2>
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm mb-3">
-            <div><div class="text-gray-500">Total Billed</div><div class="font-semibold">{{ number_format($ledgerSummary['total_billed'], 2) }}</div></div>
-            <div><div class="text-gray-500">Total Paid</div><div class="font-semibold text-green-700">{{ number_format($ledgerSummary['total_paid'], 2) }}</div></div>
-            <div><div class="text-gray-500">Due (from orders)</div><div class="font-semibold text-red-600">{{ number_format($ledgerSummary['total_due_from_orders'], 2) }}</div></div>
-            <div><div class="text-gray-500">Credit/Debit Adjustments</div><div class="font-semibold">{{ number_format($payments->sum(fn($p) => $p->type === 'credit' ? -$p->amount : $p->amount), 2) }}</div></div>
+            <div><div class="text-gray-500">Total Billed (orders)</div><div class="font-semibold">{{ number_format($ledgerSummary['total_billed'], 2) }}</div></div>
+            <div><div class="text-gray-500">Paid on Orders</div><div class="font-semibold text-green-700">{{ number_format($ledgerSummary['order_paid'], 2) }}</div></div>
+            <div><div class="text-gray-500">Credits Received (ledger)</div><div class="font-semibold text-green-700">{{ number_format($ledgerSummary['credits'], 2) }}</div></div>
+            <div><div class="text-gray-500">Total Paid (orders + credits)</div><div class="font-semibold text-green-700">{{ number_format($ledgerSummary['total_paid'], 2) }}</div></div>
+            <div><div class="text-gray-500">Due from Orders (negative = overpaid)</div><div class="font-semibold {{ $ledgerSummary['order_due'] < 0 ? 'text-blue-700' : 'text-red-600' }}">{{ number_format($ledgerSummary['order_due'], 2) }}</div></div>
+            <div><div class="text-gray-500">Debits / Charges (ledger)</div><div class="font-semibold text-red-600">{{ number_format($ledgerSummary['debits'], 2) }}</div></div>
+        </div>
+        <div class="text-xs text-gray-500 mb-3">
+            Balance = Due from Orders ({{ number_format($ledgerSummary['order_due'], 2) }}) + Debits ({{ number_format($ledgerSummary['debits'], 2) }}) &minus; Credits ({{ number_format($ledgerSummary['credits'], 2) }})
         </div>
         <div class="border-t pt-3 text-lg">
             @if($customer->credit_balance > 0)
