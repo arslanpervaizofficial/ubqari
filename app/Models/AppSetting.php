@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Cache;
 
 class AppSetting extends Model
 {
-    protected $fillable = ['menu_title', 'print_title'];
+    protected $fillable = ['menu_title', 'print_title', 'print_address', 'print_phone'];
 
     /** Returns the one settings row, creating it with the defaults if it
      *  doesn't exist yet (e.g. right after this migration runs on an

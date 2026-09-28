@@ -21,6 +21,19 @@
         <p class="text-xs text-gray-400 mt-1">Shown at the top of the printed invoice/receipt — can be different from the menu title above.</p>
     </div>
 
+    <div class="mb-4">
+        <label class="block text-sm text-gray-600 mb-1">Receipt Address (optional)</label>
+        <input name="print_address" value="{{ old('print_address', $settings->print_address) }}" maxlength="150"
+               class="w-full border rounded px-3 py-2">
+        <p class="text-xs text-gray-400 mt-1">Printed under the shop name on the thermal receipt.</p>
+    </div>
+
+    <div class="mb-4">
+        <label class="block text-sm text-gray-600 mb-1">Receipt Phone (optional)</label>
+        <input name="print_phone" value="{{ old('print_phone', $settings->print_phone) }}" maxlength="50"
+               class="w-full border rounded px-3 py-2">
+    </div>
+
     <button class="btn btn-dark">Save Settings</button>
 </form>
 @endsection

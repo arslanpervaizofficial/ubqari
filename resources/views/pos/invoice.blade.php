@@ -96,41 +96,45 @@
      margins. Items are stacked (name on one line, qty x price = total on the
      next) so numbers never wrap on a narrow roll. --}}
 <template id="thermal-template">
+    @php($cfg = \App\Models\AppSetting::current())
     <div class="r">
-        <div class="c title">{{ \App\Models\AppSetting::current()->print_title }}</div>
+        <div class="c title">{{ $cfg->print_title }}</div>
+        @if($cfg->print_address)<div class="c hdr">{{ $cfg->print_address }}</div>@endif
+        @if($cfg->print_phone)<div class="c hdr">Phone: {{ $cfg->print_phone }}</div>@endif
         <div class="c sub">{{ $order->is_quotation ? 'QUOTATION / ESTIMATE' : 'INVOICE' }}</div>
         <div class="hr"></div>
         <div>Order #: {{ $order->order_number }}</div>
-        <div>Date: {{ $order->created_at->format('Y-m-d H:i') }}</div>
-        <div>Cashier: {{ $order->cashier->name }}</div>
         <div>Customer: {{ $order->customer->name ?? 'Walk-in' }}</div>
+        <div>Cashier: {{ $order->cashier->name }}</div>
         <div class="hr"></div>
         @foreach($order->items as $item)
             <div class="item">
-                <div class="nm">{{ $loop->iteration }}. {{ $item->product->name }}</div>
-                <div class="row"><span>{{ rtrim(rtrim(number_format($item->quantity, 2, '.', ''), '0'), '.') }} {{ $item->product->unit }} x {{ number_format($item->unit_price, 2) }}</span><span class="b">{{ number_format($item->line_total, 2) }}</span></div>
+                <div class="row"><span class="nm">{{ $item->product->name }}</span><span class="b">PKR {{ number_format($item->line_total, 2) }}</span></div>
+                <div class="muted">{{ rtrim(rtrim(number_format($item->quantity, 2, '.', ''), '0'), '.') }} x PKR {{ number_format($item->unit_price, 2) }}@if($item->discount_percent > 0) (-{{ rtrim(rtrim(number_format($item->discount_percent, 2, '.', ''), '0'), '.') }}%)@endif</div>
             </div>
         @endforeach
         <div class="hr"></div>
-        <div class="small">Items: {{ $order->items->count() }} product(s), {{ $order->items->sum('quantity') }} unit(s)</div>
-        <div class="row"><span>Subtotal</span><span>{{ number_format($order->subtotal, 2) }}</span></div>
-        <div class="row"><span>Item Discounts</span><span>-{{ number_format($order->line_discount_total, 2) }}</span></div>
-        <div class="row"><span>Overall Disc. ({{ $order->discount_percent }}%)</span><span>-{{ number_format($order->discount_amount, 2) }}</span></div>
-        <div class="row big"><span>TOTAL</span><span>{{ number_format($order->total, 2) }}</span></div>
+        <div class="row"><span>Subtotal:</span><span>PKR {{ number_format($order->subtotal, 2) }}</span></div>
+        <div class="row"><span>Item Discount:</span><span>-PKR {{ number_format($order->line_discount_total, 2) }}</span></div>
+        @if($order->discount_amount > 0)
+        <div class="row"><span>Discount ({{ rtrim(rtrim(number_format($order->discount_percent, 2, '.', ''), '0'), '.') }}%):</span><span>-PKR {{ number_format($order->discount_amount, 2) }}</span></div>
+        @endif
+        <div class="row big"><span>Total</span><span>PKR {{ number_format($order->total, 2) }}</span></div>
         @if(!$order->is_quotation)
-            <div class="row"><span>Paid ({{ $order->payment_method }})</span><span>{{ number_format($order->paid_amount, 2) }}</span></div>
+            <div class="hr"></div>
+            <div class="row"><span>Paid ({{ $order->payment_method }}):</span><span>PKR {{ number_format($order->paid_amount, 2) }}</span></div>
             @if($order->bank_name || $order->transaction_id)
-                <div class="small">{{ $order->bank_name }} @if($order->transaction_id) Txn: {{ $order->transaction_id }} @endif</div>
+                <div class="muted">{{ $order->bank_name }} @if($order->transaction_id) Txn: {{ $order->transaction_id }} @endif</div>
             @endif
-            <div class="row"><span>{{ $order->due_amount < 0 ? 'Advance (this order)' : 'Due (this order)' }}</span><span>{{ number_format($order->due_amount, 2) }}</span></div>
+            <div class="row"><span>{{ $order->due_amount < 0 ? 'Advance (this order):' : 'Due (this order):' }}</span><span>PKR {{ number_format(abs($order->due_amount), 2) }}</span></div>
             @if($order->customer && abs($previousBal ?? 0) > 0.004)
-                <div class="hr"></div>
-                <div class="row"><span>{{ $previousBal > 0 ? 'Previous Balance Due' : 'Previous Advance' }}</span><span>{{ number_format(abs($previousBal), 2) }}</span></div>
-                <div class="row big"><span>{{ $balanceNow > 0 ? 'TOTAL DUE NOW' : 'ADVANCE BALANCE' }}</span><span>{{ number_format(abs($balanceNow), 2) }}</span></div>
+                <div class="row"><span>{{ $previousBal > 0 ? 'Previous Balance:' : 'Previous Advance:' }}</span><span>PKR {{ number_format(abs($previousBal), 2) }}</span></div>
+                <div class="row big"><span>{{ $balanceNow > 0 ? 'Total Due' : 'Advance' }}</span><span>PKR {{ number_format(abs($balanceNow), 2) }}</span></div>
             @endif
         @endif
         <div class="hr"></div>
-        <div class="c small">Thank you!</div>
+        <div class="row foot"><span>{{ $order->created_at->format('d.m.Y') }}</span><span>{{ $order->created_at->format('H:i:s') }}</span></div>
+        <div class="c foot" style="margin-top:4px">Thank you!</div>
     </div>
 </template>
 
@@ -141,55 +145,53 @@ document.getElementById('print-a4-btn').addEventListener('click', function () {
 });
 
 // ---- Thermal print -------------------------------------------------
-// Roll width in mm. 3-inch rolls are 76-80mm paper (~72mm printable).
-// If text still looks small/cut on your printer, change only this number.
+// Roll width in mm (3-inch rolls: 76-80). Only change this if your paper differs.
 const THERMAL_WIDTH_MM = 76;
 const THERMAL_FONT_PX = 14;
 
 document.getElementById('print-thermal-btn').addEventListener('click', function () {
-    const w = THERMAL_WIDTH_MM;
+    const w = THERMAL_WIDTH_MM, f = THERMAL_FONT_PX;
     const css = `
         @page { size: ${w}mm auto; margin: 0; }
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; background: #fff; }
-        body { width: ${w}mm; font-family: Arial, Helvetica, sans-serif; font-size: ${THERMAL_FONT_PX}px;
+        body { width: ${w}mm; font-family: Arial, Helvetica, sans-serif; font-size: ${f}px;
                font-weight: 600; color: #000; line-height: 1.35; }
-        .r { width: 100%; padding: 2mm 3mm 4mm 3mm; }
+        .r { width: 100%; padding: 1.5mm 1.5mm 3mm 1.5mm; }
         .c { text-align: center; }
-        .title { font-size: ${THERMAL_FONT_PX + 4}px; font-weight: 800; }
-        .sub { font-size: ${THERMAL_FONT_PX - 1}px; letter-spacing: 1px; }
-        .small { font-size: ${THERMAL_FONT_PX - 2}px; }
-        .hr { border-top: 1px dashed #000; margin: 5px 0; }
-        .row { display: flex; justify-content: space-between; gap: 6px; }
+        .title { font-size: ${f + 6}px; font-weight: 800; line-height: 1.2; }
+        .hdr { font-size: ${f}px; font-weight: 500; }
+        .sub { font-size: ${f - 2}px; letter-spacing: 1px; margin-top: 2px; }
+        .hr { border-top: 2px dashed #000; margin: 6px 0; }
+        .row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
         .row span:last-child { text-align: right; white-space: nowrap; }
-        .big { font-size: ${THERMAL_FONT_PX + 3}px; font-weight: 800; margin: 2px 0; }
-        .item { margin-bottom: 4px; break-inside: avoid; }
         .nm { font-weight: 700; overflow-wrap: anywhere; }
         .b { font-weight: 800; }
+        .muted { font-size: ${f - 1}px; font-weight: 500; }
+        .item { margin-bottom: 5px; break-inside: avoid; }
+        .big { font-size: ${f + 4}px; font-weight: 800; margin: 3px 0; }
+        .foot { font-size: ${f - 2}px; font-weight: 700; }
     `;
     const html = '<!doctype html><html><head><meta charset="utf-8"><title>' +
         {!! json_encode($order->order_number) !!} + '</title><style>' + css + '</style></head><body>' +
         document.getElementById('thermal-template').innerHTML + '</body></html>';
 
-    // Hidden iframe exactly one roll wide, so it lays out at the real
-    // print width (no shrink-to-fit of the whole app page).
-    const frame = document.createElement('iframe');
-    frame.style.cssText = `position:fixed;left:-10000px;top:0;width:${w}mm;height:3000px;border:0;visibility:hidden;`;
-    document.body.appendChild(frame);
-    const doc = frame.contentDocument;
-    doc.open(); doc.write(html); doc.close();
+    // A real (small) window of its own: its @page size/margin:0 are honoured
+    // exactly, unlike printing an iframe inside the app page, where the
+    // browser's default margins were being added on both sides.
+    const win = window.open('', '_blank', 'width=420,height=700');
+    if (!win) { alert('Popup blocked — please allow popups for this site and try again.'); return; }
+    win.document.open(); win.document.write(html); win.document.close();
 
     setTimeout(function () {
-        // Measure at real width, then pin the page height so the whole bill
-        // is ONE slip (no spill onto a second page).
-        const heightMm = Math.ceil(doc.body.scrollHeight * 25.4 / 96) + 4;
-        const pageStyle = doc.createElement('style');
-        pageStyle.textContent = `@page { size: ${w}mm ${heightMm}mm; margin: 0; }`;
-        doc.head.appendChild(pageStyle);
-        frame.contentWindow.focus();
-        frame.contentWindow.print();
-        setTimeout(() => frame.remove(), 2000);
-    }, 250);
+        const heightMm = Math.ceil(win.document.body.scrollHeight * 25.4 / 96) + 4;
+        const st = win.document.createElement('style');
+        st.textContent = `@page { size: ${w}mm ${heightMm}mm; margin: 0; }`;
+        win.document.head.appendChild(st);
+        win.focus();
+        win.print();
+        win.onafterprint = () => win.close();
+    }, 300);
 });
 
 const invoiceFilename = {!! json_encode($order->order_number . '.pdf') !!};

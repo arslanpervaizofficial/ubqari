@@ -18,6 +18,8 @@ class SettingController extends Controller
         $data = $request->validate([
             'menu_title' => ['required', 'string', 'max:100'],
             'print_title' => ['required', 'string', 'max:100'],
+            'print_address' => ['nullable', 'string', 'max:150'],
+            'print_phone' => ['nullable', 'string', 'max:50'],
         ]);
 
         AppSetting::current()->update($data);
