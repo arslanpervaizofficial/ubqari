@@ -38,6 +38,7 @@ class Customer extends Model
             'order_due' => $orderDue,
             'credits' => $credits,
             'debits' => $debits,
+            'total_charges' => round($billed + $debits, 2),
             'total_paid' => round($orderPaid + $credits, 2),
             'balance' => round($orderDue + $debits - $credits, 2),
         ];

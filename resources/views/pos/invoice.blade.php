@@ -2,69 +2,9 @@
 @section('title', 'Invoice ' . $order->order_number)
 @section('content')
 <style>
-    /* Default (A4/letter) print styling */
     @media print {
         #invoice-card { box-shadow: none !important; border: none !important; }
     }
-    /* Thermal (3-inch / 76mm roll) mode — toggled via a body class right
-     * before printing. Font sizes bumped up from the previous 8-9px —
-     * that's what was making printed receipts blurry/hard to read: a
-     * thermal printer's fixed dot pitch (usually 180-203 DPI) renders
-     * very small font sizes with too few dots per character to stay
-     * crisp, especially for bold text or anything slightly rotated/
-     * scaled by the print driver. Dropping the Discount column (see the
-     * table below) frees up enough width to raise these sizes and still
-     * fit a 72mm-wide receipt without wrapping mid-word. Printable width
-     * on a 3" roll is usually a little under the full 76.2mm once the
-     * printer's own margins are accounted for, so the content box is
-     * kept slightly narrower (72mm) than the physical page (76mm) as a
-     * safety margin, and the @page size is set explicitly so the browser
-     * doesn't fall back to a default (e.g. A4) page and scale/clip the
-     * content against it. */
-    @media print {
-        @page { size: 76mm auto; margin: 0; }
-    }
-    /* NOT wrapped in @media print on purpose: the thermal print button
-       adds the thermal-print class, then MEASURES the card's height to
-       size the page. That measurement happens on screen, so these rules
-       must apply on screen too — otherwise the card is measured at its
-       wide A4-ish layout (short) and printed at 72mm width (taller, text
-       wraps more), so the page is too short and the tail of the bill
-       spills onto a 2nd slip. The class is only present during printing
-       (removed again on afterprint). */
-        body.thermal-print { margin: 0; }
-        body.thermal-print, body.thermal-print .min-h-screen { min-height: 0 !important; height: auto !important; }
-        body.thermal-print main { overflow: visible !important; padding: 0 !important; }
-        body.thermal-print #invoice-actions { display: none !important; }
-        body.thermal-print #invoice-card { break-inside: avoid !important; page-break-inside: avoid !important; }
-        body.thermal-print #invoice-card {
-            box-sizing: border-box !important;
-            max-width: 72mm !important;
-            width: 72mm !important;
-            margin: 0 auto !important;
-            font-size: 12px !important;
-            line-height: 1.45 !important;
-            padding: 2mm !important;
-            font-weight: 500 !important;
-        }
-        body.thermal-print #invoice-card h1 { font-size: 15px !important; font-weight: 700 !important; }
-        body.thermal-print #invoice-card p { font-size: 11px !important; }
-        body.thermal-print #invoice-card .invoice-header { flex-direction: column !important; gap: 2px !important; }
-        body.thermal-print #invoice-card .invoice-header > div:last-child { text-align: left !important; margin-top: 2px !important; }
-        body.thermal-print #invoice-card table { font-size: 11px !important; width: 100% !important; table-layout: fixed !important; word-break: break-word !important; }
-        body.thermal-print #invoice-card table th,
-        body.thermal-print #invoice-card table td { padding: 2px 3px !important; }
-        /* Serial No. column just needs to fit "1", "2", ... "99" — the
-           Item Name column (now 2nd, since Discount was dropped and
-           Serial No. is 1st) gets the most room; the rest are short
-           numbers. */
-        body.thermal-print #invoice-card table th:first-child,
-        body.thermal-print #invoice-card table td:first-child { width: 8% !important; }
-        body.thermal-print #invoice-card table th:nth-child(2),
-        body.thermal-print #invoice-card table td:nth-child(2) { width: 38% !important; }
-        body.thermal-print #invoice-card .text-lg { font-size: 14px !important; }
-        body.thermal-print #invoice-card .space-y-1 > div { margin-bottom: 2px !important; }
-        body.thermal-print #invoice-card .text-xs { font-size: 10px !important; }
 </style>
 
 <div id="invoice-card" class="max-w-2xl mx-auto bg-white p-6 rounded-xl shadow-sm">
@@ -149,45 +89,107 @@
     </div>
 </div>
 
+
+{{-- Thermal receipt: a separate, minimal document printed from a hidden
+     iframe (see script below). It does NOT reuse the on-screen card, so the
+     app layout/sidebar/A4 table can never shrink the text or add side
+     margins. Items are stacked (name on one line, qty x price = total on the
+     next) so numbers never wrap on a narrow roll. --}}
+<template id="thermal-template">
+    <div class="r">
+        <div class="c title">{{ \App\Models\AppSetting::current()->print_title }}</div>
+        <div class="c sub">{{ $order->is_quotation ? 'QUOTATION / ESTIMATE' : 'INVOICE' }}</div>
+        <div class="hr"></div>
+        <div>Order #: {{ $order->order_number }}</div>
+        <div>Date: {{ $order->created_at->format('Y-m-d H:i') }}</div>
+        <div>Cashier: {{ $order->cashier->name }}</div>
+        <div>Customer: {{ $order->customer->name ?? 'Walk-in' }}</div>
+        <div class="hr"></div>
+        @foreach($order->items as $item)
+            <div class="item">
+                <div class="nm">{{ $loop->iteration }}. {{ $item->product->name }}</div>
+                <div class="row"><span>{{ rtrim(rtrim(number_format($item->quantity, 2, '.', ''), '0'), '.') }} {{ $item->product->unit }} x {{ number_format($item->unit_price, 2) }}</span><span class="b">{{ number_format($item->line_total, 2) }}</span></div>
+            </div>
+        @endforeach
+        <div class="hr"></div>
+        <div class="small">Items: {{ $order->items->count() }} product(s), {{ $order->items->sum('quantity') }} unit(s)</div>
+        <div class="row"><span>Subtotal</span><span>{{ number_format($order->subtotal, 2) }}</span></div>
+        <div class="row"><span>Item Discounts</span><span>-{{ number_format($order->line_discount_total, 2) }}</span></div>
+        <div class="row"><span>Overall Disc. ({{ $order->discount_percent }}%)</span><span>-{{ number_format($order->discount_amount, 2) }}</span></div>
+        <div class="row big"><span>TOTAL</span><span>{{ number_format($order->total, 2) }}</span></div>
+        @if(!$order->is_quotation)
+            <div class="row"><span>Paid ({{ $order->payment_method }})</span><span>{{ number_format($order->paid_amount, 2) }}</span></div>
+            @if($order->bank_name || $order->transaction_id)
+                <div class="small">{{ $order->bank_name }} @if($order->transaction_id) Txn: {{ $order->transaction_id }} @endif</div>
+            @endif
+            <div class="row"><span>{{ $order->due_amount < 0 ? 'Advance (this order)' : 'Due (this order)' }}</span><span>{{ number_format($order->due_amount, 2) }}</span></div>
+            @if($order->customer && abs($previousBal ?? 0) > 0.004)
+                <div class="hr"></div>
+                <div class="row"><span>{{ $previousBal > 0 ? 'Previous Balance Due' : 'Previous Advance' }}</span><span>{{ number_format(abs($previousBal), 2) }}</span></div>
+                <div class="row big"><span>{{ $balanceNow > 0 ? 'TOTAL DUE NOW' : 'ADVANCE BALANCE' }}</span><span>{{ number_format(abs($balanceNow), 2) }}</span></div>
+            @endif
+        @endif
+        <div class="hr"></div>
+        <div class="c small">Thank you!</div>
+    </div>
+</template>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <script>
 document.getElementById('print-a4-btn').addEventListener('click', function () {
-    document.body.classList.remove('thermal-print');
     window.print();
 });
+
+// ---- Thermal print -------------------------------------------------
+// Roll width in mm. 3-inch rolls are 76-80mm paper (~72mm printable).
+// If text still looks small/cut on your printer, change only this number.
+const THERMAL_WIDTH_MM = 76;
+const THERMAL_FONT_PX = 14;
+
 document.getElementById('print-thermal-btn').addEventListener('click', function () {
-    document.body.classList.add('thermal-print');
-    // `@page { size: 76mm auto; }` (in the <style> block above) asks the
-    // browser to make the page exactly as tall as the content — but
-    // "auto" height on a continuous-roll page size isn't reliably honored
-    // by every browser/print driver; some cap it at a fixed maximum, which
-    // is exactly what "aik maximum limit tak print ata, baaki blank rehta,
-    // extra page use hoti" was: anything past that cap spilled onto a
-    // second page, with the rest of the first page sitting empty. Setting
-    // an EXPLICIT height computed from the actual content, right before
-    // printing, replaces "auto" with a real number the driver can't
-    // second-guess. Appended to the end of <body> (after the static
-    // <style> block above) so it wins the normal CSS cascade for the same
-    // `@page` selector — no special-case override syntax needed.
-    // Wait for the thermal layout (72mm width) to actually apply, THEN
-    // measure — measuring before it applied is what made the page too
-    // short and pushed the bottom of the bill onto a second slip.
-    const card = document.getElementById('invoice-card');
-    void card.offsetHeight; // force reflow
+    const w = THERMAL_WIDTH_MM;
+    const css = `
+        @page { size: ${w}mm auto; margin: 0; }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; background: #fff; }
+        body { width: ${w}mm; font-family: Arial, Helvetica, sans-serif; font-size: ${THERMAL_FONT_PX}px;
+               font-weight: 600; color: #000; line-height: 1.35; }
+        .r { width: 100%; padding: 2mm 3mm 4mm 3mm; }
+        .c { text-align: center; }
+        .title { font-size: ${THERMAL_FONT_PX + 4}px; font-weight: 800; }
+        .sub { font-size: ${THERMAL_FONT_PX - 1}px; letter-spacing: 1px; }
+        .small { font-size: ${THERMAL_FONT_PX - 2}px; }
+        .hr { border-top: 1px dashed #000; margin: 5px 0; }
+        .row { display: flex; justify-content: space-between; gap: 6px; }
+        .row span:last-child { text-align: right; white-space: nowrap; }
+        .big { font-size: ${THERMAL_FONT_PX + 3}px; font-weight: 800; margin: 2px 0; }
+        .item { margin-bottom: 4px; break-inside: avoid; }
+        .nm { font-weight: 700; overflow-wrap: anywhere; }
+        .b { font-weight: 800; }
+    `;
+    const html = '<!doctype html><html><head><meta charset="utf-8"><title>' +
+        {!! json_encode($order->order_number) !!} + '</title><style>' + css + '</style></head><body>' +
+        document.getElementById('thermal-template').innerHTML + '</body></html>';
+
+    // Hidden iframe exactly one roll wide, so it lays out at the real
+    // print width (no shrink-to-fit of the whole app page).
+    const frame = document.createElement('iframe');
+    frame.style.cssText = `position:fixed;left:-10000px;top:0;width:${w}mm;height:3000px;border:0;visibility:hidden;`;
+    document.body.appendChild(frame);
+    const doc = frame.contentDocument;
+    doc.open(); doc.write(html); doc.close();
+
     setTimeout(function () {
-        const heightMm = Math.ceil(card.getBoundingClientRect().height * 25.4 / 96) + 10;
-        let pageSizeStyle = document.getElementById('thermal-page-size-style');
-        if (!pageSizeStyle) {
-            pageSizeStyle = document.createElement('style');
-            pageSizeStyle.id = 'thermal-page-size-style';
-            document.body.appendChild(pageSizeStyle);
-        }
-        pageSizeStyle.textContent = `@media print { @page { size: 76mm ${heightMm}mm; margin: 0; } }`;
-        window.print();
-    }, 150);
-});
-window.addEventListener('afterprint', function () {
-    document.body.classList.remove('thermal-print');
+        // Measure at real width, then pin the page height so the whole bill
+        // is ONE slip (no spill onto a second page).
+        const heightMm = Math.ceil(doc.body.scrollHeight * 25.4 / 96) + 4;
+        const pageStyle = doc.createElement('style');
+        pageStyle.textContent = `@page { size: ${w}mm ${heightMm}mm; margin: 0; }`;
+        doc.head.appendChild(pageStyle);
+        frame.contentWindow.focus();
+        frame.contentWindow.print();
+        setTimeout(() => frame.remove(), 2000);
+    }, 250);
 });
 
 const invoiceFilename = {!! json_encode($order->order_number . '.pdf') !!};
