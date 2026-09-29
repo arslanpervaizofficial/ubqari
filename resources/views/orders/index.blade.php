@@ -70,7 +70,7 @@
             <td class="p-3">
                 <span id="date-display-{{ $o->id }}">{{ $o->created_at->format('Y-m-d H:i') }}</span>
                 @if(in_array(auth()->user()->role, ['admin', 'manager']) && in_array($o->status, ['completed', 'cancelled']))
-                    <button type="button" class="btn btn-gray !px-2 !py-0.5 text-xs ml-1" onclick="toggleDateForm({{ $o->id }})">Change Date</button>
+                    <button type="button" class="text-[11px] px-1.5 py-0.5 border rounded text-gray-500 hover:bg-gray-50 ml-1" onclick="toggleDateForm({{ $o->id }})">Edit</button>
                     <form id="date-form-{{ $o->id }}" method="POST" action="{{ route('orders.change-date', $o) }}" class="hidden mt-1 flex items-center gap-1">
                         @csrf
                         <input type="datetime-local" name="order_date" value="{{ $o->created_at->format('Y-m-d\TH:i') }}" class="border rounded px-1 py-0.5 text-xs" required>
