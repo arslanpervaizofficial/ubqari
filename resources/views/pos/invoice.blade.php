@@ -109,27 +109,27 @@
         <div class="hr"></div>
         @foreach($order->items as $item)
             <div class="item">
-                <div class="row"><span class="nm">{{ $item->product->name }}</span><span class="b">PKR {{ number_format($item->line_total, 2) }}</span></div>
-                <div class="muted">{{ rtrim(rtrim(number_format($item->quantity, 2, '.', ''), '0'), '.') }} x PKR {{ number_format($item->unit_price, 2) }}@if($item->discount_percent > 0) (-{{ rtrim(rtrim(number_format($item->discount_percent, 2, '.', ''), '0'), '.') }}%)@endif</div>
+                <div class="row"><span class="nm">{{ $loop->iteration }}. {{ $item->product->name }}</span><span class="b">{{ number_format($item->line_total, 2) }}</span></div>
+                <div class="muted">{{ rtrim(rtrim(number_format($item->quantity, 2, '.', ''), '0'), '.') }} x {{ number_format($item->unit_price, 2) }}@if($item->discount_percent > 0) (-{{ rtrim(rtrim(number_format($item->discount_percent, 2, '.', ''), '0'), '.') }}%)@endif</div>
             </div>
         @endforeach
         <div class="hr"></div>
-        <div class="row"><span>Subtotal:</span><span>PKR {{ number_format($order->subtotal, 2) }}</span></div>
-        <div class="row"><span>Item Discount:</span><span>-PKR {{ number_format($order->line_discount_total, 2) }}</span></div>
+        <div class="row"><span>Subtotal:</span><span>{{ number_format($order->subtotal, 2) }}</span></div>
+        <div class="row"><span>Item Discount:</span><span>-{{ number_format($order->line_discount_total, 2) }}</span></div>
         @if($order->discount_amount > 0)
-        <div class="row"><span>Discount ({{ rtrim(rtrim(number_format($order->discount_percent, 2, '.', ''), '0'), '.') }}%):</span><span>-PKR {{ number_format($order->discount_amount, 2) }}</span></div>
+        <div class="row"><span>Discount ({{ rtrim(rtrim(number_format($order->discount_percent, 2, '.', ''), '0'), '.') }}%):</span><span>-{{ number_format($order->discount_amount, 2) }}</span></div>
         @endif
-        <div class="row big"><span>Total</span><span>PKR {{ number_format($order->total, 2) }}</span></div>
+        <div class="row big"><span>Total</span><span>{{ number_format($order->total, 2) }}</span></div>
         @if(!$order->is_quotation)
             <div class="hr"></div>
-            <div class="row"><span>Paid ({{ $order->payment_method }}):</span><span>PKR {{ number_format($order->paid_amount, 2) }}</span></div>
+            <div class="row"><span>Paid ({{ $order->payment_method }}):</span><span>{{ number_format($order->paid_amount, 2) }}</span></div>
             @if($order->bank_name || $order->transaction_id)
                 <div class="muted">{{ $order->bank_name }} @if($order->transaction_id) Txn: {{ $order->transaction_id }} @endif</div>
             @endif
-            <div class="row"><span>{{ $order->due_amount < 0 ? 'Advance (this order):' : 'Due (this order):' }}</span><span>PKR {{ number_format(abs($order->due_amount), 2) }}</span></div>
+            <div class="row"><span>{{ $order->due_amount < 0 ? 'Advance (this order):' : 'Due (this order):' }}</span><span>{{ number_format(abs($order->due_amount), 2) }}</span></div>
             @if($order->customer && abs($previousBal ?? 0) > 0.004)
-                <div class="row"><span>{{ $previousBal > 0 ? 'Previous Balance:' : 'Previous Advance:' }}</span><span>PKR {{ number_format(abs($previousBal), 2) }}</span></div>
-                <div class="row big"><span>{{ $balanceNow > 0 ? 'Total Due' : 'Advance' }}</span><span>PKR {{ number_format(abs($balanceNow), 2) }}</span></div>
+                <div class="row"><span>{{ $previousBal > 0 ? 'Previous Balance:' : 'Previous Advance:' }}</span><span>{{ number_format(abs($previousBal), 2) }}</span></div>
+                <div class="row big"><span>{{ $balanceNow > 0 ? 'Total Due' : 'Advance' }}</span><span>{{ number_format(abs($balanceNow), 2) }}</span></div>
             @endif
         @endif
         <div class="hr"></div>
@@ -146,7 +146,7 @@ document.getElementById('print-a4-btn').addEventListener('click', function () {
 
 // ---- Thermal print -------------------------------------------------
 // Roll width in mm (3-inch rolls: 76-80). Only change this if your paper differs.
-const THERMAL_WIDTH_MM = 76;
+const THERMAL_WIDTH_MM = 70; // 2mm safety buffer under the printer's 72.1mm head width, so a digit never lands right at the physical edge
 const THERMAL_FONT_PX = 14;
 
 document.getElementById('print-thermal-btn').addEventListener('click', function () {
@@ -157,7 +157,7 @@ document.getElementById('print-thermal-btn').addEventListener('click', function 
         html, body { margin: 0; padding: 0; background: #fff; }
         body { width: ${w}mm; font-family: Arial, Helvetica, sans-serif; font-size: ${f}px;
                font-weight: 600; color: #000; line-height: 1.35; }
-        .r { width: 100%; padding: 1.5mm 1.5mm 3mm 1.5mm; }
+        .r { width: 100%; padding: 1.5mm 0.5mm 3mm 0.5mm; }
         .c { text-align: center; }
         .title { font-size: ${f + 6}px; font-weight: 800; line-height: 1.2; }
         .hdr { font-size: ${f}px; font-weight: 500; }
