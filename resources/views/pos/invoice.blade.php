@@ -157,7 +157,7 @@ document.getElementById('print-thermal-btn').addEventListener('click', function 
         html, body { margin: 0; padding: 0; background: #fff; }
         body { width: ${w}mm; font-family: Arial, Helvetica, sans-serif; font-size: ${f}px;
                font-weight: 600; color: #000; line-height: 1.35; }
-        .r { width: 100%; padding: 1.5mm 0.5mm 3mm 0.5mm; }
+        .r { width: 100%; padding: 1.5mm 1.5mm 3mm 0.5mm; }
         .c { text-align: center; }
         .title { font-size: ${f + 6}px; font-weight: 800; line-height: 1.2; }
         .hdr { font-size: ${f}px; font-weight: 500; }
@@ -167,7 +167,7 @@ document.getElementById('print-thermal-btn').addEventListener('click', function 
         .row span:last-child { text-align: right; white-space: nowrap; }
         .nm { font-weight: 700; overflow-wrap: anywhere; }
         .b { font-weight: 800; }
-        .muted { font-size: ${f - 1}px; font-weight: 500; }
+        .muted { font-size: ${f - 1}px; font-weight: 500; margin-left: 3mm; }
         .item { margin-bottom: 5px; break-inside: avoid; }
         .big { font-size: ${f + 4}px; font-weight: 800; margin: 3px 0; }
         .foot { font-size: ${f - 2}px; font-weight: 700; }
