@@ -27,7 +27,7 @@
     </div>
     <button type="button" id="download-stock-pdf" class="btn btn-solid-green">
         <svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-        Download PDF
+        Download PDF (this page)
     </button>
 </div>
 <div class="bg-white rounded-xl shadow-sm overflow-x-auto">
@@ -53,6 +53,10 @@
     @endforeach
     </tbody>
 </table>
+</div>
+<div class="mt-4">
+    {{ $products->links() }}
+    <p class="text-xs text-gray-400 mt-2">20 products per page. The Download PDF button below exports only the products visible on this page.</p>
 </div>
 </div>
 
@@ -117,12 +121,15 @@ document.addEventListener('click', function (e) {
         },
     });
 
-    const totalValue = document.getElementById('total-stock-value')?.innerText?.trim() || '0.00';
+    // Paginated view: the PDF only contains this page's rows, so its
+    // total must be the sum of those rows — NOT the full-report total in
+    // the page header, or the PDF's rows would never add up to its total.
+    const pageTotal = rows.reduce((sum, r) => sum + (parseFloat(String(r[3]).replace(/,/g, '')) || 0), 0);
     const finalY = doc.lastAutoTable.finalY + 20;
     doc.setFontSize(11);
     doc.setTextColor(0);
     doc.setFont(undefined, 'bold');
-    doc.text(`Total Stock Value (at purchase price): ${totalValue}`, 40, finalY);
+    doc.text(`Total Stock Value (this page, at purchase price): ${pageTotal.toFixed(2)}`, 40, finalY);
 
     doc.save(`stock-report-${filterLabel.toLowerCase().replace(/\s+/g, '-')}-${new Date().toISOString().slice(0, 10)}.pdf`);
 });

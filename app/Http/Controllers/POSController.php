@@ -53,7 +53,7 @@ class POSController extends Controller
             if ($currentId && $currentId != $order->id) {
                 $current = Order::where('id', $currentId)->where('status', 'in_progress')->first();
                 if ($current) {
-                    $current->items()->count() > 0 ? $current->update(['status' => 'hold']) : $current->delete();
+                    $current->items()->count() > 0 ? $current->update(['status' => 'hold']) : $current->forceDelete();
                 }
             }
 
@@ -89,7 +89,8 @@ class POSController extends Controller
                 if ($stray->items()->count() > 0) {
                     $stray->update(['status' => 'hold']);
                 } else {
-                    $stray->delete();
+                    // Empty cart: permanently discard, never send to Trash (v1.4).
+                    $stray->forceDelete();
                 }
             });
 
@@ -113,7 +114,8 @@ class POSController extends Controller
                 if ($current->items()->count() > 0) {
                     $current->update(['status' => 'hold']);
                 } else {
-                    $current->delete();
+                    // Empty cart: permanently discard, never send to Trash (v1.4).
+                    $current->forceDelete();
                 }
             }
         }
@@ -157,7 +159,8 @@ class POSController extends Controller
                 if ($current->items()->count() > 0) {
                     $current->update(['status' => 'hold']);
                 } else {
-                    $current->delete();
+                    // Empty cart: permanently discard, never send to Trash (v1.4).
+                    $current->forceDelete();
                 }
             }
         }

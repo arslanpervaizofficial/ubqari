@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\CashParty;
+use App\Models\Customer;
 use App\Models\Expense;
 use App\Models\Product;
 use Illuminate\Http\Request;
@@ -14,18 +16,18 @@ class ExpenseController extends Controller
      *  show in the table, since browsing history is a different question
      *  from "what's my current standing".
      *
-     *  - Total Investment = current Stock Value (everything sitting in
-     *    inventory, at purchase price — money already tied up in goods)
-     *    PLUS all-time Cash In amounts (capital injected via Cash
-     *    Management's "+ Add Capital" — see CashManagementController).
+     *  - Total Investment = current Stock Value PLUS all-time Cash In
+     *    amounts PLUS Total Receivables — the same figure as "Total
+     *    Investment" on the Capital Report (v1.3 formula, v1.4 applied
+     *    here for consistency).
      *    Stock bought with the owner's money is just as much "invested" as
      *    cash sitting ready to spend.
      *  - Total Expenses = actual money spent (Cash Out only). Cash In is a
      *    capital injection, not an expense, so it's deliberately excluded
      *    here — it used to be included, which inflated this figure with
      *    money that was never actually spent.
-     *  - Net Investment Remaining = Investment − Expenses: how much of the
-     *    invested capital is still sitting unspent/in stock. */
+     *  - Net Investment Remaining = Investment − Expenses − Liabilities:
+     *    the same figure as "Net Capital" on the Capital Report. */
     public function index(Request $request)
     {
         $from = $request->input('from') ?: now()->startOfMonth()->toDateString();
@@ -36,16 +38,29 @@ class ExpenseController extends Controller
         // since purchase_price alone is the GROSS supplier rate.
         $stockValue = (float) Product::query()->get()->sum(fn ($p) => $p->stock * $p->net_purchase_price);
         $cashInjected = (float) Expense::where('type', 'cash_in')->sum('amount');
-        $totalInvestment = $stockValue + $cashInjected;
+        // FIXED 2026-10-29 (v1.4) to match the Capital Report's v1.3
+        // formula: Total Investment is current stock + injected cash +
+        // receivables, and Net Remaining is that figure minus expenses
+        // AND liabilities. The old version here omitted receivables and
+        // liabilities entirely, so this page's Net Remaining was lower
+        // than the Capital Report's Net Capital by exactly
+        // (Receivables - Liabilities) for no good reason.
+        // FIXED 2026-10-29 (v1.5): match the Capital Report — Receivables
+        // includes walk-in order dues as well as named-customer credit
+        // balances, otherwise this page again drifts from Capital Net.
+        $totalReceivables = (float) Customer::sum('credit_balance')
+            + (float) \App\Models\Order::whereNull('customer_id')->where('status', 'completed')->sum('due_amount');
+        $totalLiabilities = (float) CashParty::sum('balance');
+        $totalInvestment = $stockValue + $cashInjected + $totalReceivables;
         // Cash Out only — Cash In is capital, not an expense (see above).
         $totalExpenses = (float) Expense::where('type', 'cash_out')->sum('amount');
-        $netRemaining = $totalInvestment - $totalExpenses;
+        $netRemaining = $totalInvestment - $totalExpenses - $totalLiabilities;
 
         $expenses = Expense::whereDate('expense_date', '>=', $from)->whereDate('expense_date', '<=', $to)
             ->with('user')->latest('expense_date')->latest('id')->paginate(20)->withQueryString();
 
         return view('expenses.index', compact(
-            'expenses', 'totalInvestment', 'totalExpenses', 'netRemaining', 'stockValue', 'cashInjected', 'from', 'to'
+            'expenses', 'totalInvestment', 'totalExpenses', 'netRemaining', 'stockValue', 'cashInjected', 'totalReceivables', 'totalLiabilities', 'from', 'to'
         ));
     }
 

@@ -32,12 +32,20 @@ class Order extends Model
      *  screen, but if they never come back the row is orphaned forever
      *  and clutters reports (as an "in_progress" walk-in sale that never
      *  really happened). Called from report/listing screens so admins
-     *  don't have to think about it: empty carts are discarded, carts that
-     *  did have items are kept but demoted to "hold" (same rule POSController
-     *  already uses) so nothing with real stock/customer implications is
-     *  silently deleted. Only touches orders untouched for over an hour,
-     *  so an order the cashier is actively using right now is never
-     *  affected. */
+     *  don't have to think about it: carts that did have items are kept
+     *  but demoted to "hold" (same rule POSController already uses) so
+     *  nothing with real stock/customer implications is silently deleted.
+     *  Only touches orders untouched for over an hour, so an order the
+     *  cashier is actively using right now is never affected.
+     *
+     *  FIXED 2026-10-29 (v1.4): an EMPTY cart (no items, total 0.00, no
+     *  payment, no stock movement, no customer) used to be soft-deleted
+     *  with ->delete(), which is exactly why Trash filled up with
+     *  0.00 walk-in orders nobody ever deleted — opening the POS alone
+     *  creates the row, and the purge then "deleted" it into Trash. An
+     *  empty cart has nothing worth restoring, so it is now permanently
+     *  discarded with ->forceDelete() and never reaches Trash. Only
+     *  user-initiated deletes (completed/held orders) still go to Trash. */
     public static function purgeStaleInProgress(): void
     {
         static::where('status', 'in_progress')
@@ -46,7 +54,7 @@ class Order extends Model
             ->each(function (self $stale) {
                 $stale->items()->count() > 0
                     ? $stale->update(['status' => 'hold'])
-                    : $stale->delete();
+                    : $stale->forceDelete();
             });
     }
 

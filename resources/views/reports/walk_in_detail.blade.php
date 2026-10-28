@@ -8,8 +8,9 @@
         <a href="{{ route('reports.customers') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back</a>
     </div>
 </div>
-<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
-    <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">Total Purchased</div><div class="text-2xl font-bold">{{ number_format($totalPurchased,2) }}</div></div>
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+    <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">Total Purchased (net of returns)</div><div class="text-2xl font-bold">{{ number_format($totalPurchased,2) }}</div></div>
+    <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">Total Due (Walk-in)</div><div class="text-2xl font-bold text-red-600">{{ number_format($totalDue,2) }}</div></div>
     <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">Orders</div><div class="text-2xl font-bold">{{ $orders->total() }}</div></div>
     <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">Total Returns (net of discount)</div><div class="text-2xl font-bold">{{ number_format($returns->sum('net_amount'),2) }}</div></div>
 </div>

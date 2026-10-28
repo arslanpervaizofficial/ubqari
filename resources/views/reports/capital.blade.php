@@ -45,7 +45,7 @@
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Total Receivables</div>
         <div class="text-2xl font-bold {{ $totalReceivables > 0 ? 'text-blue-700' : '' }}">{{ number_format($totalReceivables, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1 capital-hint">Owed BY wholesale customers (credit balance on <a href="{{ route('customers.index') }}" class="underline">Customers</a>), from unpaid orders or a manual charge — now added below in Net Capital</div>
+        <div class="text-xs text-gray-400 mt-1 capital-hint">Wholesale credit {{ number_format($customerReceivables, 2) }} + Walk-in dues {{ number_format($walkInDue, 2) }} — owed BY customers (credit balance on <a href="{{ route('customers.index') }}" class="underline">Customers</a>, plus completed walk-in orders with no customer, due_amount still outstanding) — now added below in Net Capital</div>
     </div>
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Net Capital</div>
@@ -63,7 +63,7 @@
 <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
     <h2 class="font-semibold mb-1">Standard Margin</h2>
     <p class="text-xs text-gray-400 mb-4 capital-hint">
-        Revenue is each completed order's actual settled total — item-level and customer-level discounts (e.g. a wholesale customer's standing discount vs a walk-in customer's full price) are already netted out. Cost of Goods Sold uses each product's CURRENT Purchase Price minus its Purchase Discount % on the Products page (i.e. the Net Purchase Price shown there) — but since there's no historical cost snapshot per sale, COGS (not Revenue) shifts if a product's cost is edited after the sale, so this is a close estimate, not an exact figure. It's a live figure, not cached — it reflects the latest billing, stock purchases, and product-price edits the moment you load this page.
+        Revenue is each completed order's actual settled total — item-level and customer-level discounts (e.g. a wholesale customer's standing discount vs a walk-in customer's full price) are already netted out. Cost of Goods Sold uses each product's CURRENT Purchase Price minus its Purchase Discount % on the Products page (i.e. the Net Purchase Price shown there) — but since there's no historical cost snapshot per sale, COGS (not Revenue) shifts if a product's cost is edited after the sale, so this is a close estimate, not an exact figure. Customer returns are subtracted from both Revenue (net amount) and COGS (returned quantity at current net cost), so a fully returned sale contributes zero margin. It's a live figure, not cached — it reflects the latest billing, stock purchases, and product-price edits the moment you load this page.
     </p>
     <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
         <div>

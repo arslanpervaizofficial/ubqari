@@ -98,8 +98,14 @@ class ReportController extends Controller
             $query->where('stock', '>', 0);
         }
 
-        $products = $query->orderBy('name')->get();
-        $totalStockValue = $products->sum(fn ($p) => $p->stock * $p->net_purchase_price);
+        // FIXED 2026-10-29 (v1.4): paginate at 20 per page instead of
+        // loading every product on one long scroll. Total Stock Value
+        // MUST still be computed over the full filtered set, not just
+        // the current page — computing it from the paginated collection
+        // would silently understate it. withQueryString() keeps the
+        // search/filter on every page link.
+        $totalStockValue = (clone $query)->get()->sum(fn ($p) => $p->stock * $p->net_purchase_price);
+        $products = $query->orderBy('name')->paginate(20)->withQueryString();
         $outOfStockCount = Product::active()->where('stock', '<=', 0)->count();
         $availableCount = Product::active()->where('stock', '>', 0)->count();
 
@@ -163,12 +169,28 @@ class ReportController extends Controller
             ->orderByDesc('total_purchased')
             ->get();
 
+        // FIXED 2026-10-29 (v1.5): total_purchased is now NET of returns.
+        // withSum above is gross (completed orders only); subtract each
+        // customer's from_customer return net amounts, then re-sort, so
+        // the list order reflects kept goods, not gross billing. No
+        // flooring at zero: a return for a sale outside the system (or
+        // recorded without an order) honestly shows as a negative net,
+        // the same rule the Reports hub already uses for Total Sales.
+        $returnsByCustomer = $this->customerReturns()->whereNotNull('customer_id')
+            ->groupBy('customer_id')
+            ->map(fn ($rows) => $rows->sum(fn ($r) => $r->net_amount));
+        $customers->each(function ($c) use ($returnsByCustomer) {
+            $c->total_purchased = (float) ($c->total_purchased ?? 0) - (float) ($returnsByCustomer[$c->id] ?? 0);
+        });
+        $customers = $customers->sortByDesc('total_purchased')->values();
+
         // Walk-in orders/returns are the ones with no customer_id at all —
         // not a Customer row, so they never show up in the list above.
-        // Surfaced here as its own summary instead.
+        // Surfaced here as its own summary instead, also net of returns.
+        $walkInReturns = $this->customerReturns()->whereNull('customer_id')->sum(fn ($r) => $r->net_amount);
         $walkIn = [
             'orders_count' => Order::whereNull('customer_id')->where('status', 'completed')->count(),
-            'total_purchased' => (float) Order::whereNull('customer_id')->where('status', 'completed')->sum('total'),
+            'total_purchased' => (float) Order::whereNull('customer_id')->where('status', 'completed')->sum('total') - $walkInReturns,
         ];
 
         return view('reports.customers', compact('customers', 'walkIn'));
@@ -187,10 +209,22 @@ class ReportController extends Controller
         // still shows here (and can be deleted from this screen if needed).
         $orders = Order::whereNull('customer_id')->where('status', '!=', 'in_progress')
             ->with('items.product')->latest()->paginate(15);
-        $totalPurchased = (float) Order::whereNull('customer_id')->where('status', 'completed')->sum('total');
         $returns = \App\Models\StockReturn::whereNull('customer_id')->where('type', 'from_customer')->with('product')->latest()->get();
+        // FIXED 2026-10-29 (v1.5): Total Purchased is net of walk-in
+        // returns (the Returns card on this page already showed them
+        // separately, but the headline total was still gross).
+        $totalPurchased = (float) Order::whereNull('customer_id')->where('status', 'completed')->sum('total') - $returns->sum(fn ($r) => $r->net_amount);
+        // FIXED 2026-10-29 (v1.5): walk-in dues are now surfaced. A
+        // walk-in order has no customer row, so its due_amount used to
+        // go nowhere — it never appeared in Capital Receivables. It is
+        // kept current by the existing order ledger flow: recording a
+        // payment on an order's Ledger page decrements its due_amount,
+        // so this figure (and Capital Receivables) falls when the
+        // walk-in customer pays. No POS behaviour was changed: walk-in
+        // orders are NOT forced to full payment at completion.
+        $totalDue = (float) Order::whereNull('customer_id')->where('status', 'completed')->sum('due_amount');
 
-        return view('reports.walk_in_detail', compact('orders', 'totalPurchased', 'returns'));
+        return view('reports.walk_in_detail', compact('orders', 'totalPurchased', 'totalDue', 'returns'));
     }
 
     public function customerDetail(Customer $customer)
@@ -199,7 +233,14 @@ class ReportController extends Controller
 
         $orders = $customer->orders()->where('status', '!=', 'in_progress')
             ->with('items.product')->latest()->paginate(15);
-        $totalPurchased = $customer->orders()->where('status', 'completed')->sum('total');
+        // FIXED 2026-10-29 (v1.5): Total Purchased is net of this
+        // customer's returns. Total Due is deliberately left as the sum
+        // of order due_amounts: after a return, the amount to actually
+        // collect is the Credit Balance card (return credit notes land
+        // there), while Total Due still shows the pre-return order dues.
+        // If the two differ after a return, collect on Credit Balance.
+        $totalPurchased = $customer->orders()->where('status', 'completed')->sum('total')
+            - \App\Models\StockReturn::where('customer_id', $customer->id)->where('type', 'from_customer')->get()->sum(fn ($r) => $r->net_amount);
         $totalDue = $customer->orders()->where('status', 'completed')->sum('due_amount');
         $returns = \App\Models\StockReturn::where('customer_id', $customer->id)->with('product')->latest()->get();
 
@@ -298,7 +339,19 @@ class ReportController extends Controller
         // this, recording a customer debit with no matching order visibly
         // did nothing to the business's standing, which is what made it
         // look like a bug rather than an incomplete picture.
-        $totalReceivables = (float) Customer::sum('credit_balance');
+        // FIXED 2026-10-29 (v1.5): Receivables now has TWO parts.
+        // (1) Named customers: Customer::sum('credit_balance') as before.
+        // (2) Walk-in dues: completed walk-in orders have no customer row,
+        // so their due_amount used to go nowhere and never appeared in
+        // Receivables at all. It is summed here from the orders
+        // themselves, and it stays current because the existing order
+        // ledger flow (Orders -> Ledger -> record payment) decrements
+        // due_amount when a walk-in customer pays, so Receivables falls
+        // as those dues are collected. No POS behaviour was changed:
+        // walk-in orders are NOT forced to full payment at completion.
+        $customerReceivables = (float) Customer::sum('credit_balance');
+        $walkInDue = (float) Order::whereNull('customer_id')->where('status', 'completed')->sum('due_amount');
+        $totalReceivables = $customerReceivables + $walkInDue;
         // Total Investment (new formula, see above): current stock +
         // injected cash + receivables. It is deliberately computed AFTER
         // $totalReceivables so the identity below holds.
@@ -338,11 +391,24 @@ class ReportController extends Controller
         // exists yet), so COGS shifts if a product's cost is edited after
         // the sale. Nothing here is cached: it's a live query run fresh on
         // every page load. ---
-        $totalRevenue = (float) Order::where('status', 'completed')->sum('total');
+        // FIXED 2026-10-29 (v1.5): Revenue and COGS are now NET of
+        // customer returns. Before this, a sale that was later fully
+        // returned still counted its full profit here (revenue minus
+        // cost), even though the goods came back and the money went back
+        // (or the customer's credit was reduced). A fully returned sale
+        // now contributes exactly zero margin: its net sale value comes
+        // out of Revenue, and its returned quantity at current net cost
+        // comes out of COGS. Returns with no product row left (product
+        // deleted) still reduce Revenue; their COGS part is skipped
+        // because their cost can no longer be priced.
+        $allReturns = $this->customerReturns();
+        $totalReturnsValue = $allReturns->sum(fn ($r) => $r->net_amount);
+        $totalReturnsCogs = $allReturns->sum(fn ($r) => $r->product ? $r->quantity * $r->product->net_purchase_price : 0);
+        $totalRevenue = (float) Order::where('status', 'completed')->sum('total') - $totalReturnsValue;
         $approxCogs = (float) OrderItem::join('orders', 'order_items.order_id', '=', 'orders.id')
             ->join('products', 'order_items.product_id', '=', 'products.id')
             ->where('orders.status', 'completed')
-            ->sum(DB::raw('order_items.quantity * products.purchase_price * (1 - COALESCE(products.purchase_discount_percent, 0) / 100)'));
+            ->sum(DB::raw('order_items.quantity * products.purchase_price * (1 - COALESCE(products.purchase_discount_percent, 0) / 100)')) - $totalReturnsCogs;
         $approxGrossMargin = $totalRevenue - $approxCogs;
         $approxNetProfit = $approxGrossMargin - $totalExpenses;
 
@@ -370,10 +436,32 @@ class ReportController extends Controller
         $expenses = (clone $query)->with('user')->latest('expense_date')->latest('id')->get();
 
         return view('reports.capital', compact(
-            'totalInvestment', 'cumulativePurchaseCost', 'remainingInvestment', 'totalExpenses', 'netCapital', 'stockValue', 'cashInjected', 'totalLiabilities', 'totalReceivables',
+            'totalInvestment', 'cumulativePurchaseCost', 'remainingInvestment', 'totalExpenses', 'netCapital', 'stockValue', 'cashInjected', 'totalLiabilities', 'totalReceivables', 'customerReceivables', 'walkInDue', 'totalReturnsValue', 'totalReturnsCogs',
             'totalRevenue', 'approxCogs', 'approxGrossMargin', 'approxNetProfit',
             'monthly', 'year', 'byCategory', 'expenses', 'from', 'to', 'breakdownView', 'month'
         ));
+    }
+
+    /** All customer returns (type from_customer), with their product so
+     *  the returned cost can be priced at the product's CURRENT net
+     *  purchase price — the same approximation the sales COGS below
+     *  already uses (no historical cost snapshot per sale exists).
+     *  net_amount is the StockReturn accessor: quantity * unit_price
+     *  minus discount_amount, i.e. the money value of the returned goods.
+     *  FIXED 2026-10-29 (v1.5): returns are now netted from customer
+     *  totals and from Capital Revenue/COGS. Before this, a sale that
+     *  was later fully returned still counted its full profit in Gross
+     *  Margin, and a customer's "total_purchased" still counted goods
+     *  they had given back. This does NOT double-count against
+     *  Receivables: Receivables is a BALANCE (what is still owed), while
+     *  Revenue / total_purchased are FLOWS (what was sold and kept) —
+     *  a return correctly reduces both, for different reasons. A return
+     *  credit note already reduces a named customer's credit_balance
+     *  (see StockReturnController), so Receivables was already
+     *  return-aware; only the flow figures were not. */
+    private function customerReturns(): \Illuminate\Support\Collection
+    {
+        return \App\Models\StockReturn::where('type', 'from_customer')->with('product')->get();
     }
 
     /** One row per calendar month of the given year: that month's Cash In/
@@ -425,6 +513,18 @@ class ReportController extends Controller
                     $months[$m]['cogs'] += $item->quantity * $item->product->net_purchase_price;
                 });
             });
+
+        // FIXED 2026-10-29 (v1.5): net returns in the RETURN month (when
+        // the refund/credit actually happened), not the sale month, so a
+        // month's profit reflects what was kept in that month.
+        $this->customerReturns()->each(function ($r) use (&$months, $year) {
+            if ($r->created_at->year !== $year) return;
+            $m = $r->created_at->month;
+            $months[$m]['revenue'] -= $r->net_amount;
+            if ($r->product) {
+                $months[$m]['cogs'] -= $r->quantity * $r->product->net_purchase_price;
+            }
+        });
 
         foreach ($months as $m => $row) {
             $margin = $row['revenue'] - $row['cogs'];
@@ -480,6 +580,17 @@ class ReportController extends Controller
                     $days[$d]['cogs'] += $item->quantity * $item->product->net_purchase_price;
                 });
             });
+
+        // FIXED 2026-10-29 (v1.5): same return netting as the monthly
+        // breakdown, by return day.
+        $this->customerReturns()->each(function ($r) use (&$days, $year, $month) {
+            if ($r->created_at->year !== $year || $r->created_at->month !== $month) return;
+            $d = $r->created_at->day;
+            $days[$d]['revenue'] -= $r->net_amount;
+            if ($r->product) {
+                $days[$d]['cogs'] -= $r->quantity * $r->product->net_purchase_price;
+            }
+        });
 
         foreach ($days as $d => $row) {
             $margin = $row['revenue'] - $row['cogs'];

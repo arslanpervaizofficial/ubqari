@@ -44,7 +44,7 @@
         <button class="btn btn-solid-green">Save</button>
     </form>
     <p class="text-xs text-gray-400 mt-3">
-        <strong>Cash In</strong> = you're putting fresh money into the business to cover this expense right now — it counts toward both Current Investment and Total Expenses (so Net Remaining doesn't move).
+        <strong>Cash In</strong> = you're putting fresh money into the business — it counts toward Investment, not toward Expenses, so Net Remaining goes up.
         <strong>Cash Out</strong> = paying from money the business already has — it only counts toward Total Expenses, so Net Remaining goes down.
     </p>
 </div>
@@ -54,7 +54,7 @@
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Current Investment</div>
         <div class="text-2xl font-bold text-green-700">{{ number_format($totalInvestment, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1">Stock Value {{ number_format($stockValue, 2) }} + Cash Injected {{ number_format($cashInjected, 2) }} — same figure as "Remaining Investment" on the Capital Report; the Capital Report's own "Total Investment" is a different, larger, all-time figure</div>
+        <div class="text-xs text-gray-400 mt-1">Stock Value {{ number_format($stockValue, 2) }} + Cash Injected {{ number_format($cashInjected, 2) }} + Receivables {{ number_format($totalReceivables, 2) }} — same figure as "Total Investment" on the Capital Report</div>
     </div>
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Total Expenses</div>
@@ -64,7 +64,7 @@
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Net Investment Remaining</div>
         <div class="text-2xl font-bold {{ $netRemaining < 0 ? 'text-red-600' : '' }}">{{ number_format($netRemaining, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1">Investment − Expenses</div>
+        <div class="text-xs text-gray-400 mt-1">Investment − Expenses − Liabilities — same figure as "Net Capital" on the Capital Report</div>
     </div>
 </div>
 <p class="text-xs text-gray-400 mb-6">These three figures are your current overall standing (as of right now) — the date filter below only controls which past entries show in the table, it doesn't change these.</p>
