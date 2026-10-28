@@ -23,6 +23,7 @@
                 <th class="px-4">Cost Price</th>
                 <th class="px-4">Discount % <span class="text-gray-400 font-normal">(click to edit)</span></th>
                 <th class="px-4">Line Total</th>
+                <th class="px-4">Action</th><!-- FIX 4: per-line delete -->
             </tr>
         </thead>
         <tbody>
@@ -41,6 +42,20 @@
                           data-field="discount_percent" data-value="{{ $item->discount_percent }}">{{ $item->discount_percent }}</span>%
                 </td>
                 <td class="px-4 font-medium po-line-total">{{ number_format($item->received_quantity * $item->net_cost_price, 2) }}</td>
+                <td class="px-4 whitespace-nowrap">
+                    @if($item->can_delete)
+                        <form method="POST" action="{{ route('purchase-orders.items.destroy', [$purchaseOrder, $item]) }}"
+                              onsubmit="return confirm('Ye line delete kar di jaye gi aur stock {{ $item->received_quantity }} {{ $item->product->unit }} se kam ho jaye ga. Continue karein?');"
+                              class="inline">
+                            @csrf @method('DELETE')
+                            <button class="btn btn-red">Delete</button>
+                        </form>
+                        <div class="text-xs text-gray-400">Koi sale nahi hai.</div>
+                    @else
+                        <button class="btn btn-gray" disabled title="{{ $item->delete_block_reason }}">Delete</button>
+                        <div class="text-xs text-gray-500">{{ $item->delete_block_reason }}</div>
+                    @endif
+                </td>
             </tr>
         @endforeach
         </tbody>
@@ -56,6 +71,7 @@
                 (<span id="po-discount-amount">{{ number_format($purchaseOrder->discount_amount, 2) }}</span>)
             </div>
             <div class="text-xl font-bold">Total: <span id="po-total">{{ number_format($purchaseOrder->total, 2) }}</span></div>
+            <div class="text-gray-500 text-sm">Total Products: {{ $purchaseOrder->items->count() }} &nbsp;·&nbsp; Total Received Quantity: {{ $purchaseOrder->items->sum('received_quantity') }}</div>
         </div>
     </div>
 </div>

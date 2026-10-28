@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Product;
 use App\Models\PurchaseOrder;
+use App\Models\PurchaseOrderDraft;
 use App\Models\PurchaseOrderItem;
 use App\Models\StockMovement;
 use App\Models\Supplier;
@@ -136,11 +137,130 @@ class PurchaseOrderController extends Controller
             ];
         }
 
-        return view('purchase_orders.create', compact('suppliers', 'products', 'productsForJs', 'preselectedLines'));
+        // FIX 1 — Draft: the user may have a temporary (not final) save.
+        // A draft is NOT a purchase order row: it lives in its own table,
+        // never appears in the PO list / Purchase Report, and can never be
+        // "Mark Received". Only "Create Purchase Order" creates a real PO.
+        $draft = null;
+        if ($request->filled('draft_id')) {
+            $draft = PurchaseOrderDraft::where('user_id', auth()->id())->find($request->input('draft_id'));
+        }
+        if (!$draft) {
+            $draft = PurchaseOrderDraft::where('user_id', auth()->id())->latest()->first();
+        }
+        $draftLines = $draft ? ($draft->items ?? []) : [];
+
+        // Rows coming back after a validation error (old input) or from a
+        // draft may name a product that is no longer "active" — it would
+        // otherwise not be in PRODUCTS, so the row would render blank.
+        // Merge those products into the JS list so every restored row
+        // shows its real product name.
+        $restoredIds = collect()
+            ->merge(collect(old('items', []))->pluck('product_id'))
+            ->merge(collect($draftLines)->pluck('product_id'))
+            ->merge(collect($preselectedLines)->pluck('product_id'))
+            ->filter()->unique()->values();
+        if ($restoredIds->isNotEmpty()) {
+            $extra = Product::whereIn('id', $restoredIds)->get()->map(fn ($p) => [
+                'id' => $p->id, 'name' => $p->name, 'sku' => $p->sku,
+                'cost' => $p->purchase_price, 'discount' => $p->purchase_discount_percent,
+                'max_discount' => $p->max_discount_percent, 'stock' => $p->stock, 'unit' => $p->unit,
+            ]);
+            $productsForJs = $productsForJs->merge($extra)->unique('id')->values();
+        }
+
+        return view('purchase_orders.create', compact('suppliers', 'products', 'productsForJs', 'preselectedLines', 'draft', 'draftLines'));
+    }
+
+    /** FIX 1 — Save / autosave as a TEMPORARY draft. This creates NO
+     *  purchase order, touches NO stock, and appears in NO report.
+     *  Validation is deliberately loose here: a half-filled row is
+     *  allowed in a draft (the user is mid-typing), it is only the
+     *  FINAL create that demands complete rows. One draft per user:
+     *  a later save updates the same draft instead of piling up rows. */
+    public function storeDraft(Request $request)
+    {
+        $data = $request->validate([
+            'draft_id' => ['nullable', 'exists:purchase_order_drafts,id'],
+            'supplier_id' => ['nullable', 'exists:suppliers,id'],
+            'discount_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'items' => ['nullable', 'array'],
+        ]);
+
+        // Keep rows that have anything typed in them (even a partial
+        // row — the user may finish it after logging back in), drop
+        // rows that are completely blank.
+        $items = collect($data['items'] ?? [])
+            ->filter(fn ($line) => is_array($line) && (
+                !empty($line['product_id'])
+                || ($line['quantity'] ?? '') !== ''
+                || ($line['cost_price'] ?? '') !== ''
+            ))
+            ->map(fn ($line) => [
+                'product_id' => $line['product_id'] ?? null,
+                'quantity' => $line['quantity'] ?? null,
+                'cost_price' => $line['cost_price'] ?? null,
+                'discount_percent' => $line['discount_percent'] ?? 0,
+                'max_discount_percent' => $line['max_discount_percent'] ?? 0,
+            ])
+            ->values()->all();
+
+        $draft = null;
+        if (!empty($data['draft_id'])) {
+            $draft = PurchaseOrderDraft::where('user_id', auth()->id())->find($data['draft_id']);
+        }
+        if (!$draft) {
+            $draft = PurchaseOrderDraft::where('user_id', auth()->id())->latest()->first();
+        }
+        if (!$draft) {
+            $draft = new PurchaseOrderDraft(['user_id' => auth()->id()]);
+        }
+        $draft->fill([
+            'supplier_id' => $data['supplier_id'] ?? $draft->supplier_id,
+            'discount_percent' => $data['discount_percent'] ?? $draft->discount_percent ?? 0,
+            'items' => $items,
+        ]);
+        $draft->save();
+
+        if ($request->expectsJson() || $request->ajax()) {
+            return response()->json([
+                'draft_id' => $draft->id,
+                'saved_at' => $draft->updated_at->format('H:i:s'),
+                'message' => 'Draft save ho gaya hai. Ye final order nahi hai, stock update nahi hua.',
+            ]);
+        }
+        return back()->with('status', 'Draft save ho gaya hai. Ye final order nahi hai, stock update nahi hua.');
     }
 
     public function store(Request $request)
     {
+        // FIX 2 (server half) — an untouched blank "new product" row used
+        // to fail validation (blank product/quantity/cost are all
+        // "required"), and the re-rendered form ignored old() input, so
+        // the user lost everything AND the row's remove button. Now:
+        // fully-blank rows are dropped BEFORE validation (they are not
+        // an error), and a partially-filled row fails with its ROW NUMBER
+        // so the user knows exactly which row to fix or delete.
+        $filteredItems = collect($request->input('items', []))
+            ->filter(fn ($line) => is_array($line) && (
+                !empty($line['product_id'])
+                || ($line['quantity'] ?? '') !== ''
+                || ($line['cost_price'] ?? '') !== ''
+            ))
+            ->values()->all();
+        foreach ($filteredItems as $i => $line) {
+            if (empty($line['product_id']) || ($line['quantity'] ?? '') === '' || ($line['cost_price'] ?? '') === '') {
+                return back()->withInput()->withErrors([
+                    'items' => 'Row ' . ($i + 1) . ': product, quantity aur cost teeno lazmi hain. '
+                        . 'Ya to row poori bharein, ya usay cross (×) se delete kar dein.',
+                ]);
+            }
+        }
+        if (empty($filteredItems)) {
+            return back()->withInput()->withErrors(['items' => 'Kam az kam aik product lazmi hai.']);
+        }
+        $request->merge(['items' => $filteredItems]);
+
         $data = $request->validate([
             'supplier_id' => ['required', 'exists:suppliers,id'],
             'discount_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
@@ -218,6 +338,15 @@ class PurchaseOrderController extends Controller
 
             return $po;
         });
+
+        // FIX 1 — the final order now exists, so the temporary draft
+        // (server copy) is done with. The browser copy is cleared by the
+        // PO list page when it sees this "created." status (see the
+        // snippet in routes-and-index-patch.txt).
+        if ($request->filled('draft_id')) {
+            PurchaseOrderDraft::where('user_id', auth()->id())
+                ->where('id', $request->input('draft_id'))->delete();
+        }
 
         return redirect()->route('purchase-orders.index')->with('status', "PO #{$po->id} created.");
     }
@@ -316,6 +445,13 @@ class PurchaseOrderController extends Controller
         // first edit is made. Recalculating on every view keeps it
         // consistent from the very first look, not just after a correction.
         $this->recalculateTotals($purchaseOrder);
+        // FIX 4 — per-line delete permission for the show view. The
+        // button is only enabled when this exact line may be deleted;
+        // otherwise the reason is shown next to the disabled button.
+        foreach ($purchaseOrder->items as $item) {
+            $item->delete_block_reason = $this->itemDeleteBlockReason($purchaseOrder, $item);
+            $item->can_delete = $item->delete_block_reason === null;
+        }
         return view('purchase_orders.show', compact('purchaseOrder'));
     }
 
@@ -413,6 +549,130 @@ class PurchaseOrderController extends Controller
             'discount_amount' => $purchaseOrder->discount_amount,
             'total' => $purchaseOrder->total,
         ]);
+    }
+
+    /** FIX 4 — Delete ONE line of a purchase order.
+     *
+     *  Pending PO: stock was never touched, so the line is simply
+     *  removed and the PO totals are recomputed from the ordered
+     *  quantities that remain.
+     *
+     *  Received ("final") PO: the line may be deleted ONLY if nothing
+     *  was sold from the stock this line brought in. The check is in
+     *  itemDeleteBlockReason() and mirrors the guard the codebase
+     *  already uses for deleting a whole PO (PurchaseOrder::
+     *  reverseReceivedEffects): a sale after this PO was received, a
+     *  return already made against the line, or stock lower than what
+     *  this line received all block the delete with a plain reason.
+     *  When allowed, stock is reduced by exactly this line's RECEIVED
+     *  quantity in the same transaction, and an "adjustment" stock
+     *  movement is logged — the original purchase movement is kept
+     *  (it is shared by purchase_order_id across all lines, so deleting
+     *  it would corrupt the other lines' history; the adjustment nets
+     *  this line out instead). Stock can never go negative this way. */
+    public function destroyItem(PurchaseOrder $purchaseOrder, PurchaseOrderItem $item)
+    {
+        abort_unless($item->purchase_order_id === $purchaseOrder->id, 404);
+        abort_unless(in_array($purchaseOrder->status, ['pending', 'received']), 404);
+
+        if ($reason = $this->itemDeleteBlockReason($purchaseOrder, $item)) {
+            return back()->withErrors(['purchase_order_item' => $reason]);
+        }
+
+        try {
+            DB::transaction(function () use ($purchaseOrder, $item) {
+                if ($purchaseOrder->status === 'pending') {
+                    $item->delete();
+                    $remaining = $purchaseOrder->items()->get();
+                    $subtotal = $remaining->sum(fn ($line) => $line->quantity * $line->net_cost_price);
+                    $discountAmount = round($subtotal * ($purchaseOrder->discount_percent / 100), 2);
+                    $purchaseOrder->update([
+                        'subtotal' => round($subtotal, 2),
+                        'discount_amount' => $discountAmount,
+                        'total' => round($subtotal - $discountAmount, 2),
+                    ]);
+                    return;
+                }
+
+                // Received PO: reverse exactly this line's stock effect.
+                $receivedQty = (float) $item->received_quantity;
+                $product = Product::lockForUpdate()->findOrFail($item->product_id);
+                if ($receivedQty > 0) {
+                    if ($product->stock < $receivedQty) {
+                        throw new \RuntimeException(
+                            "Can't delete this line: \"{$product->name}\" only has {$product->stock} in stock, "
+                            . "but this PO brought in {$receivedQty} — some of it has already been sold."
+                        );
+                    }
+                    $product->decrement('stock', $receivedQty);
+                    StockMovement::create([
+                        'product_id' => $item->product_id,
+                        'type' => 'adjustment',
+                        'quantity' => -$receivedQty,
+                        'reason' => "PO #{$purchaseOrder->id} line deleted: {$product->name} ({$receivedQty} removed from stock)",
+                        'user_id' => auth()->id(),
+                        'purchase_order_id' => $purchaseOrder->id,
+                    ]);
+                }
+                $item->delete();
+                $this->recalculateTotals($purchaseOrder->fresh());
+            });
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['purchase_order_item' => $e->getMessage()]);
+        }
+
+        $msg = $purchaseOrder->status === 'received'
+            ? "Product line delete ho gai — stock {$item->received_quantity} se kam kar diya gaya."
+            : 'Product line delete ho gai.';
+        return back()->with('status', $msg);
+    }
+
+    /** Returns null when the line may be deleted, otherwise the plain
+     *  reason that is shown to the user (and used to disable the button
+     *  on the show page). Kept in one place so show() and destroyItem()
+     *  can never disagree. */
+    private function itemDeleteBlockReason(PurchaseOrder $purchaseOrder, PurchaseOrderItem $item): ?string
+    {
+        if ($purchaseOrder->status === 'pending') {
+            return null; // pending never touched stock
+        }
+        if ($purchaseOrder->status !== 'received') {
+            return 'Is PO ki line delete nahi ho sakti.';
+        }
+
+        $returnedQty = (float) $item->returns()->sum('quantity');
+        if ($returnedQty > 0) {
+            return "Ye line delete nahi ho sakti: is line ki {$returnedQty} unit return ho chuki hai.";
+        }
+
+        // Sale check (the user's rule, exactly): a "sale" stock movement
+        // for this product AFTER this PO's own purchase movement means
+        // stock from this PO has gone out in a sale. Movement IDs are
+        // sequential, so id > purchase movement id is the reliable
+        // "after" test even when two movements share a timestamp.
+        $purchaseMovement = StockMovement::where('purchase_order_id', $purchaseOrder->id)
+            ->where('product_id', $item->product_id)
+            ->where('type', 'purchase')
+            ->orderBy('id')->first();
+        if ($purchaseMovement) {
+            $soldAfter = StockMovement::where('product_id', $item->product_id)
+                ->where('type', 'sale')
+                ->where('id', '>', $purchaseMovement->id)
+                ->exists();
+            if ($soldAfter) {
+                return 'Ye product delete nahi ho sakta: is PO ke stock receive hone ke baad is product ki sale ho chuki hai.';
+            }
+        }
+
+        // Stock-sufficiency check (same guard as whole-PO delete): if
+        // current stock is below what this line received, part of this
+        // line's stock must already have been consumed.
+        $product = $item->product;
+        if ($product && (float) $item->received_quantity > 0 && $product->stock < (float) $item->received_quantity) {
+            return "Ye product delete nahi ho sakta: stock me sirf {$product->stock} hai, jabke is PO se {$item->received_quantity} aaya tha — kuch sale ho chuka hai.";
+        }
+
+        return null;
     }
 
     /** Recomputes subtotal/discount_amount/total from every line's current
