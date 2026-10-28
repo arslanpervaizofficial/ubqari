@@ -102,6 +102,8 @@ Route::middleware('auth')->group(function () {
         Route::patch('purchase-orders/{purchaseOrder}/discount', [PurchaseOrderController::class, 'updateDiscount'])->name('purchase-orders.update-discount');
         Route::get('purchase-orders/{purchaseOrder}/receive', [PurchaseOrderController::class, 'receiveForm'])->name('purchase-orders.receive-form');
         Route::post('purchase-orders/{purchaseOrder}/receive', [PurchaseOrderController::class, 'receive'])->name('purchase-orders.receive');
+        Route::post('purchase-orders/draft', [PurchaseOrderController::class, 'storeDraft'])->name('purchase-orders.draft');
+        Route::delete('purchase-orders/{purchaseOrder}/items/{item}', [PurchaseOrderController::class, 'destroyItem'])->name('purchase-orders.items.destroy');
         Route::get('products-ajax-search', [ProductController::class, 'ajaxSearch'])->name('products.ajax-search');
 
         // Sales-order history: search/filter, edit (loads into POS billing).

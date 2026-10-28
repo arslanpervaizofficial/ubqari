@@ -56,4 +56,10 @@
 </div>
 <div class="mt-4">{{ $purchaseOrders->links() }}</div>
 </div>
+@if(session('status') && str_contains(session('status'), 'created.'))
+    <script>
+        // Final PO created — this draft is finished, do not restore it again.
+        try { localStorage.removeItem('ubqari_po_draft_' + {{ auth()->id() ?? 0 }}); } catch (e) {}
+    </script>
+@endif
 @endsection
