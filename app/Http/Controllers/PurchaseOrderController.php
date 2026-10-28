@@ -10,6 +10,7 @@ use App\Models\StockMovement;
 use App\Models\Supplier;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class PurchaseOrderController extends Controller
 {
@@ -141,14 +142,21 @@ class PurchaseOrderController extends Controller
         // A draft is NOT a purchase order row: it lives in its own table,
         // never appears in the PO list / Purchase Report, and can never be
         // "Mark Received". Only "Create Purchase Order" creates a real PO.
+        // v1.1 HARDENING — if the migration has not been run yet, the
+        // draft table does not exist. That must NEVER crash this page:
+        // the form still opens (browser draft copy still works), and the
+        // user just gets no server draft until `php artisan migrate`.
         $draft = null;
-        if ($request->filled('draft_id')) {
-            $draft = PurchaseOrderDraft::where('user_id', auth()->id())->find($request->input('draft_id'));
+        $draftLines = [];
+        if (Schema::hasTable('purchase_order_drafts')) {
+            if ($request->filled('draft_id')) {
+                $draft = PurchaseOrderDraft::where('user_id', auth()->id())->find($request->input('draft_id'));
+            }
+            if (!$draft) {
+                $draft = PurchaseOrderDraft::where('user_id', auth()->id())->latest()->first();
+            }
+            $draftLines = $draft ? ($draft->items ?? []) : [];
         }
-        if (!$draft) {
-            $draft = PurchaseOrderDraft::where('user_id', auth()->id())->latest()->first();
-        }
-        $draftLines = $draft ? ($draft->items ?? []) : [];
 
         // Rows coming back after a validation error (old input) or from a
         // draft may name a product that is no longer "active" — it would
@@ -180,6 +188,19 @@ class PurchaseOrderController extends Controller
      *  a later save updates the same draft instead of piling up rows. */
     public function storeDraft(Request $request)
     {
+        // v1.1 HARDENING — same as create(): a missing draft table must
+        // never crash an autosave. The browser copy (localStorage) keeps
+        // working, and the user is told plainly to run the migration.
+        // This check MUST come before validate(), because the
+        // 'exists:purchase_order_drafts,id' rule itself queries the table.
+        if (!Schema::hasTable('purchase_order_drafts')) {
+            $msg = 'Server draft save nahi hua: purchase_order_drafts table nahi mili. php artisan migrate chalayein. (Browser draft abhi bhi save hai.)';
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json(['draft_id' => null, 'saved_at' => null, 'message' => $msg, 'migration_pending' => true]);
+            }
+            return back()->withErrors(['draft' => $msg]);
+        }
+
         $data = $request->validate([
             'draft_id' => ['nullable', 'exists:purchase_order_drafts,id'],
             'supplier_id' => ['nullable', 'exists:suppliers,id'],
@@ -343,7 +364,7 @@ class PurchaseOrderController extends Controller
         // (server copy) is done with. The browser copy is cleared by the
         // PO list page when it sees this "created." status (see the
         // snippet in routes-and-index-patch.txt).
-        if ($request->filled('draft_id')) {
+        if ($request->filled('draft_id') && Schema::hasTable('purchase_order_drafts')) {
             PurchaseOrderDraft::where('user_id', auth()->id())
                 ->where('id', $request->input('draft_id'))->delete();
         }

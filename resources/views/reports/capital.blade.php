@@ -1,52 +1,60 @@
 @extends('layouts.app')
 @section('title', 'Total Capital Report')
 @section('content')
+<style>
+    body.capital-hints-off .capital-hint { display: none !important; }
+    @media print {
+        body.capital-hints-off .capital-hint { display: none !important; }
+        #capital-hints-toggle { display: none !important; }
+    }
+</style>
 <div class="flex justify-between items-center mb-4">
     <h1 class="text-2xl font-bold">Total Capital Report</h1>
     <div class="flex gap-2">
+        <button type="button" id="capital-hints-toggle" class="btn btn-gray print:hidden">Hints: Off</button>
         @include('reports._export_pdf')
         <a href="{{ route('reports.index') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back to Reports</a>
     </div>
 </div>
 
-<p class="text-xs text-gray-400 mb-4">The figures below (Investment, Liabilities, Standard Margin) reflect your current overall standing — they aren't affected by the date filter further down, which only controls the category breakdown and entry list at the very bottom.</p>
+<p class="text-xs text-gray-400 mb-4 capital-hint">The figures below (Investment, Liabilities, Standard Margin) reflect your current overall standing — they aren't affected by the date filter further down, which only controls the category breakdown and entry list at the very bottom.</p>
 
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Total Investment</div>
         <div class="text-2xl font-bold text-green-700">{{ number_format($totalInvestment, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1">Stock Purchased (all-time) {{ number_format($cumulativePurchaseCost, 2) }} + Cash Injected {{ number_format($cashInjected, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1">A running total of everything ever put into the business — doesn't change when stock sells.</div>
+        <div class="text-xs text-gray-400 mt-1 capital-hint">Current Stock Value {{ number_format($stockValue, 2) }} + Cash Injected {{ number_format($cashInjected, 2) }} + Receivables {{ number_format($totalReceivables, 2) }}</div>
+        <div class="text-xs text-gray-400 mt-1 capital-hint">What is currently deployed in the business — falls when stock sells, and re-buying with sale cash does not double-count the same money.</div>
     </div>
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Remaining Investment</div>
         <div class="text-2xl font-bold text-blue-700">{{ number_format($remainingInvestment, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1">Current Stock Value {{ number_format($stockValue, 2) }} + Cash Injected {{ number_format($cashInjected, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1">What's left of the investment after sales — shrinks as stock is sold.</div>
+        <div class="text-xs text-gray-400 mt-1 capital-hint">Current Stock Value {{ number_format($stockValue, 2) }} + Cash Injected {{ number_format($cashInjected, 2) }}</div>
+        <div class="text-xs text-gray-400 mt-1 capital-hint">What's left of the investment after sales — shrinks as stock is sold.</div>
     </div>
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Total Out (Expenses)</div>
         <div class="text-2xl font-bold text-red-600">{{ number_format($totalExpenses, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1">Everything actually spent (Cash Out only) — Cash In is capital, tracked separately above</div>
+        <div class="text-xs text-gray-400 mt-1 capital-hint">Everything actually spent (Cash Out only) — Cash In is capital, tracked separately above</div>
     </div>
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Total Liabilities</div>
         <div class="text-2xl font-bold {{ $totalLiabilities > 0 ? 'text-red-600' : '' }}">{{ number_format($totalLiabilities, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1">Owed to people, from <a href="{{ route('cash-management.index') }}" class="underline">Cash Management</a> — now subtracted below in Net Capital</div>
+        <div class="text-xs text-gray-400 mt-1 capital-hint">Owed to people, from <a href="{{ route('cash-management.index') }}" class="underline">Cash Management</a> — now subtracted below in Net Capital</div>
     </div>
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Total Receivables</div>
         <div class="text-2xl font-bold {{ $totalReceivables > 0 ? 'text-blue-700' : '' }}">{{ number_format($totalReceivables, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1">Owed BY wholesale customers (credit balance on <a href="{{ route('customers.index') }}" class="underline">Customers</a>), from unpaid orders or a manual charge — now added below in Net Capital</div>
+        <div class="text-xs text-gray-400 mt-1 capital-hint">Owed BY wholesale customers (credit balance on <a href="{{ route('customers.index') }}" class="underline">Customers</a>), from unpaid orders or a manual charge — now added below in Net Capital</div>
     </div>
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Net Capital</div>
         <div class="text-2xl font-bold {{ $netCapital < 0 ? 'text-red-600' : '' }}">{{ number_format($netCapital, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1">Remaining Investment + Receivables − Expenses − Liabilities</div>
+        <div class="text-xs text-gray-400 mt-1 capital-hint">Total Investment − Expenses − Liabilities</div>
     </div>
 </div>
 
-<p class="text-xs text-gray-400 mb-6">
+<p class="text-xs text-gray-400 mb-6 capital-hint">
     This is a read-only report. To inject capital or record a liability, use the
     <a href="{{ route('cash-management.index') }}" class="underline font-medium">Cash Management</a> page — to record an actual expense, use the
     <a href="{{ route('expenses.index') }}" class="underline font-medium">Expenses</a> page.
@@ -54,7 +62,7 @@
 
 <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
     <h2 class="font-semibold mb-1">Standard Margin</h2>
-    <p class="text-xs text-gray-400 mb-4">
+    <p class="text-xs text-gray-400 mb-4 capital-hint">
         Revenue is each completed order's actual settled total — item-level and customer-level discounts (e.g. a wholesale customer's standing discount vs a walk-in customer's full price) are already netted out. Cost of Goods Sold uses each product's CURRENT Purchase Price minus its Purchase Discount % on the Products page (i.e. the Net Purchase Price shown there) — but since there's no historical cost snapshot per sale, COGS (not Revenue) shifts if a product's cost is edited after the sale, so this is a close estimate, not an exact figure. It's a live figure, not cached — it reflects the latest billing, stock purchases, and product-price edits the moment you load this page.
     </p>
     <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
@@ -207,5 +215,26 @@
 </div>
 </div>
 
-<p class="text-sm text-gray-500 mt-4">Manage individual entries on the <a href="{{ route('expenses.index') }}" class="text-blue-600 hover:underline">Expenses</a> page.</p>
+<p class="text-sm text-gray-500 mt-4 capital-hint">Manage individual entries on the <a href="{{ route('expenses.index') }}" class="text-blue-600 hover:underline">Expenses</a> page.</p>
+
+<script>
+(function () {
+    var btn = document.getElementById('capital-hints-toggle');
+    if (!btn) return;
+    function applyHints(on) {
+        document.body.classList.toggle('capital-hints-off', !on);
+        document.body.classList.toggle('capital-hints-on', on);
+        btn.textContent = on ? 'Hints: On' : 'Hints: Off';
+        try { localStorage.setItem('capital_hints', on ? 'on' : 'off'); } catch (e) {}
+    }
+    var stored = null;
+    try { stored = localStorage.getItem('capital_hints'); } catch (e) {}
+    // Default is OFF, as requested. A previous choice on this browser is remembered.
+    // Export PDF is the browser print dialog, so the same on/off state applies to the PDF.
+    applyHints(stored === 'on');
+    btn.addEventListener('click', function () {
+        applyHints(!document.body.classList.contains('capital-hints-on'));
+    });
+})();
+</script>
 @endsection

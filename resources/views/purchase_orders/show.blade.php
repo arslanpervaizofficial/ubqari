@@ -43,17 +43,17 @@
                 </td>
                 <td class="px-4 font-medium po-line-total">{{ number_format($item->received_quantity * $item->net_cost_price, 2) }}</td>
                 <td class="px-4 whitespace-nowrap">
-                    @if($item->can_delete)
+                    @if($item->can_delete && Route::has('purchase-orders.items.destroy'))
                         <form method="POST" action="{{ route('purchase-orders.items.destroy', [$purchaseOrder, $item]) }}"
                               onsubmit="return confirm('Ye line delete kar di jaye gi aur stock {{ $item->received_quantity }} {{ $item->product->unit }} se kam ho jaye ga. Continue karein?');"
                               class="inline">
                             @csrf @method('DELETE')
                             <button class="btn btn-red">Delete</button>
                         </form>
-                        <div class="text-xs text-gray-400">Koi sale nahi hai.</div>
+                    @elseif($item->can_delete)
+                        <button class="btn btn-gray" disabled title="{{ $item->delete_block_reason ?? 'Delete route abhi add nahi hui' }}">Delete</button>
                     @else
                         <button class="btn btn-gray" disabled title="{{ $item->delete_block_reason }}">Delete</button>
-                        <div class="text-xs text-gray-500">{{ $item->delete_block_reason }}</div>
                     @endif
                 </td>
             </tr>

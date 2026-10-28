@@ -226,18 +226,50 @@ class ReportController extends Controller
         $stockValue = (float) Product::query()->get()->sum(fn ($p) => $p->stock * $p->net_purchase_price);
         $cashInjected = (float) Expense::where('type', 'cash_in')->sum('amount');
 
-        // Total Investment is a CONSTANT, historical figure: every rupee
-        // ever put into the business, whether as stock purchases or cash
-        // injections. It never moves when a product sells — that's the
-        // whole point of it (a running "how much have we invested so far"
-        // total). So it's built from the sum of every RECEIVED PO's own
-        // `total` column (which PurchaseOrderController keeps correct at
-        // every point it can change — see the comment on
-        // ReportController::purchases() for why that's now safe to rely
-        // on directly, header discounts included) plus cash injected.
+        // --- Total Investment: FIXED 2026-10-29 (v1.3) ---
+        // Old formula was cumulative: sum of EVERY received PO's `total`
+        // + cash injected. That never fell when stock sold, so the same
+        // rupee got counted again every time it cycled: sell stock for
+        // cash, use that cash to buy new stock, and the old formula added
+        // the new purchase on top of the old one, even though no new
+        // owner money came in. Example: buy 100,000 stock, sell it for
+        // 120,000, buy 120,000 stock again with the sale cash — old Total
+        // Investment said 220,000, but the owner only ever put 100,000 in
+        // (plus 20,000 profit).
+        //
+        // New formula counts only what is CURRENTLY deployed in the
+        // business, so a sale DOES move it:
+        //   Total Investment = Current Stock Value + Cash Injected
+        //                      + Total Receivables
+        //   = Remaining Investment + Total Receivables
+        // - Cash sale: stock falls by cost, receivables don't move, so
+        //   Total falls by the cost sold (the cash goes to the till, which
+        //   this system does not track as a separate balance — see the
+        //   limitation note below).
+        // - Credit sale: stock falls by cost, receivables rise by the sale
+        //   price, so Total rises only by the profit on that sale.
+        // - Repurchase with sale cash: stock rises again, but the earlier
+        //   sale had already brought Total down, so nothing is double
+        //   counted.
+        // - New owner money (Expenses `cash_in`): Cash Injected rises, so
+        //   Total, Remaining and Net Capital all rise.
+        // - New borrowed money (CashParty balance): Liabilities rise and,
+        //   once it is spent on stock, Total rises by the same stock
+        //   value — so a borrowed investment shows in BOTH Total
+        //   Investment and Liabilities, while Net Capital (below) is
+        //   unchanged by borrowing, exactly as accounting requires:
+        //   borrowing is funding, not equity.
+        //
+        // LIMITATION (honest, from the data this system actually holds):
+        // there is no cash-till balance and no supplier-payment tracking
+        // here, so till cash itself is not part of Total Investment — it
+        // shows up only once it is turned into stock or a receivable.
+        // Net Capital below is therefore the equity figure to trust, and
+        // Total Investment is the "capital currently tied up in stock,
+        // injected cash and credit" figure, not a full balance sheet.
         $cumulativePurchaseCost = (float) PurchaseOrder::where('status', 'received')->sum('total');
-        $totalInvestment = $cumulativePurchaseCost + $cashInjected;
-
+        // Retained only for reference / Purchase Report reconciliation —
+        // it is NO LONGER part of Total Investment (see above).
         // Remaining Investment is what's actually still tied up in the
         // business right now: current stock value (this DOES shrink as
         // products sell) plus cash injected (that doesn't get "spent" by a
@@ -267,10 +299,19 @@ class ReportController extends Controller
         // did nothing to the business's standing, which is what made it
         // look like a bug rather than an incomplete picture.
         $totalReceivables = (float) Customer::sum('credit_balance');
-        // Net Capital is meant to reflect true current standing (equity):
-        // Remaining Investment, plus what customers still owe (an asset),
-        // minus what's been spent AND what's owed to others (liabilities).
-        $netCapital = $remainingInvestment + $totalReceivables - $totalExpenses - $totalLiabilities;
+        // Total Investment (new formula, see above): current stock +
+        // injected cash + receivables. It is deliberately computed AFTER
+        // $totalReceivables so the identity below holds.
+        $totalInvestment = $remainingInvestment + $totalReceivables;
+        // Net Capital is meant to reflect true current standing (equity).
+        // With the new Total Investment this is simply:
+        //   Net Capital = Total Investment - Expenses - Liabilities
+        // which expands to exactly the old expression (Remaining +
+        // Receivables - Expenses - Liabilities), so the Net Capital NUMBER
+        // does not change with this fix — only the Total Investment card
+        // does. Borrowing raises Total Investment and Liabilities by the
+        // same amount and leaves Net Capital untouched.
+        $netCapital = $totalInvestment - $totalExpenses - $totalLiabilities;
 
         // --- Standard Margin (Revenue − Cost of Goods Sold). The old
         // "Profit & Loss" card (discount-differential formula) was removed

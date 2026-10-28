@@ -122,7 +122,7 @@ const PRESELECTED_LINES = {!! json_encode($preselectedLines) !!};
 // old input (quantity / cost_price), preselected lines use qty / cost.
 const OLD_LINES = {!! json_encode(old('items')) !!};
 const DRAFT_LINES = {!! json_encode($draftLines ?? []) !!};
-const DRAFT_ROUTE = "{{ route('purchase-orders.draft') }}";
+const DRAFT_ROUTE = "{{ Route::has('purchase-orders.draft') ? route('purchase-orders.draft') : url('purchase-orders/draft') }}";
 const CURRENT_USER_ID = {{ auth()->id() ?? 0 }};
 const SEARCH_URL = "{{ route('products.ajax-search') }}";
 let lineCount = 0;
@@ -594,7 +594,7 @@ async function sendDraft(manual) {
         sessionExpired = false;
         document.getElementById('session-warning').style.display = 'none';
         saveDraftToBrowser();
-        draftStatusEl.textContent = 'Draft saved' + (json && json.saved_at ? ' • ' + json.saved_at : '');
+        draftStatusEl.textContent = (json && json.message) ? json.message + (json.saved_at ? ' • ' + json.saved_at : '') : 'Draft saved' + (json && json.saved_at ? ' • ' + json.saved_at : '');
     } catch (e) {
         // Offline / network error: the browser copy is still safe.
         draftStatusEl.textContent = 'Draft browser me save hai (server se connect nahi hua).';
