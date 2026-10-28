@@ -417,6 +417,24 @@ document.getElementById('cart-body').addEventListener('change', async function (
         document.getElementById('line-discount').textContent = Number(data.order.line_discount_total).toFixed(2);
         document.getElementById('discount').textContent = Number(data.order.discount_amount).toFixed(2);
         document.getElementById('total').textContent = Number(data.order.total).toFixed(2);
+        // FIXED 2026-10-29 (v1.6): this handler used to update Total Bill
+        // Payment here but NOT Total Payment with Due, so after any Qty
+        // or Disc % edit the "with Due" figure stayed at the value from
+        // the last full renderOrder() (add/remove item, customer change,
+        // overall discount). Example seen live: Total 16,392, previous
+        // due -327, but "with Due" still showed 15,566 — the value from
+        // when the bill was 15,893, before a 499 edit. The previous
+        // balance itself does not change on a qty/discount edit, so it
+        // is read back from the Due Payment span (commas stripped, since
+        // the server render formats it with thousands separators) and
+        // re-added to the new total here.
+        const dueEl = document.getElementById('due-payment');
+        const totalWithDueEl = document.getElementById('total-with-due');
+        const totalWithDueRow = document.getElementById('total-with-due-row');
+        if (dueEl && totalWithDueEl && totalWithDueRow && !totalWithDueRow.classList.contains('hidden')) {
+            const prevDue = Number(dueEl.textContent.replace(/,/g, '')) || 0;
+            totalWithDueEl.textContent = (Number(data.order.total) + prevDue).toFixed(2);
+        }
         document.getElementById('unit-count').textContent = data.order.items.reduce((sum, i) => sum + Number(i.quantity), 0);
         const paidInput = document.querySelector('#checkout-modal input[name="paid_amount"]');
         if (paidInput) paidInput.value = data.order.total;
