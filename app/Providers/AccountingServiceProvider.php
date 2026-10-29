@@ -6,12 +6,14 @@ use App\Models\CashTransaction;
 use App\Models\CustomerPayment;
 use App\Models\Expense;
 use App\Models\Order;
+use App\Models\OrderPayment;
 use App\Models\PurchaseOrder;
 use App\Models\SupplierPayment;
 use App\Observers\CashTransactionObserver;
 use App\Observers\CustomerPaymentObserver;
 use App\Observers\ExpenseObserver;
 use App\Observers\OrderObserver;
+use App\Observers\OrderPaymentObserver;
 use App\Observers\PurchaseOrderObserver;
 use App\Observers\SupplierPaymentObserver;
 use Illuminate\Support\ServiceProvider;
@@ -48,5 +50,7 @@ class AccountingServiceProvider extends ServiceProvider
         SupplierPayment::observe(SupplierPaymentObserver::class);
         CustomerPayment::observe(CustomerPaymentObserver::class);
         CashTransaction::observe(CashTransactionObserver::class);
+        // v3.1.0 (H12): post-completion order-ledger credits.
+        OrderPayment::observe(OrderPaymentObserver::class);
     }
 }

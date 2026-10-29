@@ -35,8 +35,13 @@ class UserController extends Controller
             @unlink($dir . '/' . $user->image);
         }
 
-        $filename = Str::random(20) . '.' . $request->file('image')->getClientOriginalExtension();
-        $request->file('image')->move($dir, $filename);
+        // v3.1.0 (L2): never trust the client-supplied extension
+        // (a script renamed .php would keep a dangerous suffix). The
+        // extension is detected from the file's actual MIME type, and
+        // the validation below additionally restricts it to image types.
+        $file = $request->file('image');
+        $filename = Str::random(20) . '.' . $file->extension();
+        $file->move($dir, $filename);
 
         return $filename;
     }
@@ -51,7 +56,7 @@ class UserController extends Controller
             'city' => ['nullable', 'string'],
             'address' => ['nullable', 'string'],
             'id_card_number' => ['nullable', 'string', 'regex:/^\d{5}-\d{7}-\d{1}$/'],
-            'image' => ['nullable', 'image', 'max:2048'],
+            'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'password' => ['required', 'string', 'min:10', 'confirmed'],
             'role' => ['required', 'in:admin,manager,cashier'],
         ]);
@@ -60,7 +65,10 @@ class UserController extends Controller
         $data['password'] = Hash::make($data['password']);
         unset($data['password_confirmation']);
 
-        User::create($data);
+        // v3.1.0 (L4): password/role are no longer in User::$fillable,
+        // so creation goes through forceFill() — explicit server-side
+        // assignment of validated values, never request mass assignment.
+        (new User)->forceFill($data)->save();
 
         return redirect()->route('users.index')->with('status', 'User created.');
     }
@@ -92,7 +100,7 @@ class UserController extends Controller
             'city' => ['nullable', 'string'],
             'address' => ['nullable', 'string'],
             'id_card_number' => ['nullable', 'string', 'regex:/^\d{5}-\d{7}-\d{1}$/'],
-            'image' => ['nullable', 'image', 'max:2048'],
+            'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'role' => ['required', 'in:admin,manager,cashier'],
             'password' => ['nullable', 'string', 'min:10', 'confirmed'],
         ]);
@@ -114,7 +122,9 @@ class UserController extends Controller
         }
         unset($data['password_confirmation']);
 
-        $user->update($data);
+        // v3.1.0 (L4): see store() — role/password come from validated
+        // admin input but are assigned explicitly, not mass-assigned.
+        $user->forceFill($data)->save();
 
         return redirect()->route('users.index')->with('status', 'User updated.');
     }
@@ -176,7 +186,7 @@ class UserController extends Controller
             && $this->activeAdminCountExcluding([$user->id]) === 0) {
             return back()->withErrors(['error' => 'You cannot disable the last active admin. Promote another admin first.']);
         }
-        $user->update(['is_active' => !$user->is_active]);
+        $user->forceFill(['is_active' => !$user->is_active])->save();
         $label = $user->is_active ? 'enabled' : 'disabled';
         return back()->with('status', "{$user->name} {$label}.");
     }

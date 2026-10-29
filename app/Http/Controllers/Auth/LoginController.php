@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\RateLimiter;
 
 class LoginController extends Controller
 {
@@ -20,7 +21,18 @@ class LoginController extends Controller
             'password' => ['required'],
         ]);
 
+        // v3.1.0 (L3): per-account lockout, on top of the per-IP route
+        // throttle (throttle:5,1 in routes/web.php). Keyed on the
+        // lowercased email, 5 attempts per minute, cleared on a
+        // successful login — so IP-hopping against one account no
+        // longer bypasses the limit. No migration needed.
+        $throttleKey = 'login:' . strtolower($credentials['email']);
+        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+            return back()->withErrors(['email' => 'Too many login attempts for this account. Please try again in a minute.'])->onlyInput('email');
+        }
+
         if (Auth::attempt($credentials, $request->boolean('remember'))) {
+            RateLimiter::clear($throttleKey);
             if (!Auth::user()->is_active) {
                 Auth::logout();
                 return back()->withErrors(['email' => 'This account has been disabled. Contact your admin.'])->onlyInput('email');
@@ -57,7 +69,16 @@ class LoginController extends Controller
             return redirect()->intended(route('dashboard'));
         }
 
+        RateLimiter::hit($throttleKey, 60);
+
         return back()->withErrors(['email' => 'Invalid credentials.'])->onlyInput('email');
+    }
+
+    /** v3.1.0 (L1): GET /logout renders this confirm page instead of
+     *  logging out directly. The page's form POSTs to route('logout'). */
+    public function showLogoutConfirm()
+    {
+        return view('auth.logout-confirm');
     }
 
     public function logout(Request $request)

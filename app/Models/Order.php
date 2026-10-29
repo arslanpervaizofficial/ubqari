@@ -4,16 +4,22 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use App\Models\StockMovement;
 
 class Order extends Model
 {
     use SoftDeletes;
 
+    // v3.1.0 (L4): status, total, paid_amount and due_amount removed —
+    // money/status transitions must never be mass-assignable. Call
+    // sites now use forceFill() (POSController, OrderController, and
+    // purgeStaleInProgress() below).
     protected $fillable = [
-        'order_number', 'customer_id', 'user_id', 'status',
-        'subtotal', 'line_discount_total', 'discount_percent', 'discount_amount', 'total',
-        'paid_amount', 'due_amount', 'payment_method', 'bank_name', 'transaction_id', 'is_quotation',
+        'order_number', 'customer_id', 'user_id',
+        'subtotal', 'line_discount_total', 'discount_percent', 'discount_amount',
+        'payment_method', 'bank_name', 'transaction_id', 'is_quotation',
         // Split-payment breakdown persisted by POSController::complete()
         // (H23-part); columns are created by the migration package.
         'cash_amount', 'bank_amount',
@@ -56,7 +62,7 @@ class Order extends Model
             ->get()
             ->each(function (self $stale) {
                 $stale->items()->count() > 0
-                    ? $stale->update(['status' => 'hold'])
+                    ? $stale->forceFill(['status' => 'hold'])->save()
                     : $stale->forceDelete();
             });
     }
@@ -66,35 +72,60 @@ class Order extends Model
      *  any amount it added to the customer's credit balance (due amount).
      *  Used both when reopening a completed order for editing and when
      *  permanently deleting one, so stock/ledger totals stay accurate
-     *  either way. Caller is responsible for wrapping this in a DB transaction
-     *  and deciding what happens to the order row itself afterwards. */
+     *  either way. Caller decides what happens to the order row itself
+     *  afterwards (status change / delete, in its own transaction).
+     *
+     *  v3.1.0 (C2): this method now runs in its own transaction (a
+     *  savepoint when the caller already holds one), locks the order
+     *  row with lockForUpdate and re-checks status on the LOCKED row —
+     *  the old guard read only the in-memory status, so two concurrent
+     *  reversals could both pass it. The locked row's figures (not the
+     *  caller's possibly stale instance) drive every leg below.
+     *  v3.1.0 (H7): the stock increase is mirrored in batches.
+     *  v3.1.0 (L11c): a force-deleted (missing) product skips ONLY its
+     *  stock leg, transparently (logged); the customer-credit leg is
+     *  NEVER skipped for a missing product. */
     public function reverseCompletedEffects(): void
     {
-        if ($this->status !== 'completed') {
-            return;
-        }
+        DB::transaction(function () {
+            $locked = static::withTrashed()->lockForUpdate()->find($this->id);
+            if (!$locked || $locked->status !== 'completed') {
+                return;
+            }
 
-        // FIXED (H3): the full line quantity used to be added back even
-        // when the customer had already returned part of it — and the
-        // return had already put those units back on the shelf — so stock
-        // was overstated by the returned quantity (e.g. sold 10, returned
-        // 4, delete added back 10). Only the NET quantity still out
-        // (sold minus already returned) is added back. Note: the linked
-        // return records themselves are left in place (not voided) — that
-        // is a deliberate product decision to record separately, not an
-        // oversight; the stock math here is correct either way.
-        foreach ($this->items()->with('product')->get() as $item) {
-            $netQty = max(0, $item->quantity - $item->returns()->sum('quantity'));
-            $item->product->increment('stock', $netQty);
-        }
+            // FIXED (H3): the full line quantity used to be added back even
+            // when the customer had already returned part of it — and the
+            // return had already put those units back on the shelf — so stock
+            // was overstated by the returned quantity (e.g. sold 10, returned
+            // 4, delete added back 10). Only the NET quantity still out
+            // (sold minus already returned) is added back. Note: the linked
+            // return records themselves are left in place (not voided) — that
+            // is a deliberate product decision to record separately, not an
+            // oversight; the stock math here is correct either way.
+            foreach ($locked->items()->with('product')->get() as $item) {
+                $netQty = max(0, $item->quantity - $item->returns()->sum('quantity'));
+                if ($netQty <= 0) {
+                    continue;
+                }
+                if (!$item->product) {
+                    Log::warning('Order reversal skipped stock leg: product missing (force-deleted).', [
+                        'order_id' => $locked->id, 'order_item_id' => $item->id, 'product_id' => $item->product_id, 'net_quantity' => $netQty,
+                    ]);
+                    continue;
+                }
+                $item->product->increment('stock', $netQty);
+                ProductBatch::mirrorStockDelta((int) $item->product_id, (float) $netQty, ['record' => "Order #{$locked->id}"]);
+            }
 
-        StockMovement::where('order_id', $this->id)->where('type', 'sale')->delete();
+            StockMovement::where('order_id', $locked->id)->where('type', 'sale')->delete();
 
-        // due_amount is signed for named customers (negative = they overpaid
-        // and were carrying an advance), so any non-zero value is reversed.
-        if ($this->customer_id && abs($this->due_amount) > 0.004) {
-            $this->customer()->decrement('credit_balance', $this->due_amount);
-        }
+            // due_amount is signed for named customers (negative = they overpaid
+            // and were carrying an advance), so any non-zero value is reversed.
+            // This leg runs even when a product above was missing.
+            if ($locked->customer_id && abs($locked->due_amount) > 0.004) {
+                $locked->customer()->decrement('credit_balance', $locked->due_amount);
+            }
+        });
     }
 
     /** The exact inverse of reverseCompletedEffects() — used when an order is
@@ -102,35 +133,79 @@ class Order extends Model
      *  reversed when it was deleted. Order matters here: this must run
      *  BEFORE $order->restore(), while the row is still soft-deleted, so a
      *  page refresh mid-way never shows a "completed" order with its stock
-     *  effects only half re-applied. */
+     *  effects only half re-applied.
+     *
+     *  v3.1.0 (C2/L11g): own locked guard — the order row is locked
+     *  (withTrashed, so a trashed row locks) and status re-checked
+     *  inside this method's transaction, not just at the caller.
+     *  v3.1.0 (H7): the stock decrease is mirrored in batches.
+     *  v3.1.0 (L11c): a missing product skips only its stock leg
+     *  (logged); the customer-credit leg still runs. A line that would
+     *  drive stock negative refuses the whole restore (the Trash
+     *  pre-check is only a stale-read early warning; this locked
+     *  check is authoritative). */
     public function restoreCompletedEffects(): void
     {
-        if ($this->status !== 'completed') {
-            return;
-        }
+        DB::transaction(function () {
+            $locked = static::withTrashed()->lockForUpdate()->find($this->id);
+            if (!$locked || $locked->status !== 'completed') {
+                return;
+            }
 
-        // FIXED (H3): mirror of reverseCompletedEffects() — only the NET
-        // quantity still out (sold minus already returned) is deducted
-        // again, and the recreated sale movement carries that net
-        // quantity, so the movement history matches the stock change. A
-        // fully-returned line deducts nothing and writes no 0-qty
-        // movement.
-        foreach ($this->items()->with('product')->get() as $item) {
-            $netQty = max(0, $item->quantity - $item->returns()->sum('quantity'));
-            $item->product->decrement('stock', $netQty);
-            if ($netQty > 0) {
+            // FIXED (H3): mirror of reverseCompletedEffects() — only the NET
+            // quantity still out (sold minus already returned) is deducted
+            // again, and the recreated sale movement carries that net
+            // quantity, so the movement history matches the stock change. A
+            // fully-returned line deducts nothing and writes no 0-qty
+            // movement.
+            $items = $locked->items()->with('product')->get()->sortBy('product_id')->values();
+
+            // Guard pass on locked product rows, before anything mutates.
+            $lockedProducts = [];
+            foreach ($items as $item) {
+                $netQty = max(0, $item->quantity - $item->returns()->sum('quantity'));
+                if ($netQty <= 0 || !$item->product) {
+                    continue;
+                }
+                $product = Product::lockForUpdate()->find($item->product_id);
+                if (!$product) {
+                    continue;
+                }
+                if ((float) $product->stock < (float) $netQty) {
+                    throw new \RuntimeException(
+                        "Can't restore order {$locked->order_number}: \"{$product->name}\" only has {$product->stock} in stock, "
+                        . "but restoring this order would deduct {$netQty} again — some of it has already been sold again."
+                    );
+                }
+                $lockedProducts[$item->product_id] = $product;
+            }
+
+            foreach ($items as $item) {
+                $netQty = max(0, $item->quantity - $item->returns()->sum('quantity'));
+                if ($netQty <= 0) {
+                    continue;
+                }
+                $product = $lockedProducts[$item->product_id] ?? null;
+                if (!$product) {
+                    Log::warning('Order restore skipped stock leg: product missing (force-deleted).', [
+                        'order_id' => $locked->id, 'order_item_id' => $item->id, 'product_id' => $item->product_id, 'net_quantity' => $netQty,
+                    ]);
+                    continue;
+                }
+                $product->decrement('stock', $netQty);
+                ProductBatch::mirrorStockDelta((int) $item->product_id, -(float) $netQty, ['record' => "Order #{$locked->id}"]);
                 StockMovement::create([
                     'product_id' => $item->product_id,
                     'type' => 'sale',
                     'quantity' => -$netQty,
                     'user_id' => auth()->id(),
-                    'order_id' => $this->id,
+                    'order_id' => $locked->id,
                 ]);
             }
-        }
 
-        if ($this->customer_id && abs($this->due_amount) > 0.004) {
-            $this->customer()->increment('credit_balance', $this->due_amount);
-        }
+            if ($locked->customer_id && abs($locked->due_amount) > 0.004) {
+                $locked->customer()->increment('credit_balance', $locked->due_amount);
+            }
+        });
     }
 }

@@ -9,10 +9,15 @@ class Customer extends Model
 {
     use SoftDeletes;
 
+    // v3.1.0 (L4): credit_balance removed — the balance is ledger-
+    // derived (increment/decrement + syncBalance()'s forceFill), never
+    // request mass assignment. No controller create/update ever passed
+    // credit_balance (rules() has no such field), so no call-site change
+    // was needed for this model.
     protected $fillable = [
         'name', 'phone', 'email', 'address', 'id_card_number',
         'current_address', 'permanent_address', 'image',
-        'discount_percent', 'credit_balance', 'is_active',
+        'discount_percent', 'is_active',
     ];
 
     public function orders() { return $this->hasMany(Order::class); }

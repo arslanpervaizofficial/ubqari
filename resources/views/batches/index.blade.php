@@ -10,6 +10,9 @@
         {{ __('Batch tracking tables are not installed yet — please run the v3.0 migrations first.') }}
     </div>
 @else
+    <div class="bg-amber-50 border border-amber-300 text-amber-800 text-sm px-4 py-2 rounded-lg mb-4">
+        {{ __('Note: expired batches are shown in red below, but sales are not blocked on expired stock yet — an expired batch is still consumed earliest-expiry-first on sale. Check this page before selling expired items.') }}
+    </div>
     <div class="flex flex-wrap items-center gap-2 mb-4">
         <a href="{{ route('batches.index', ['filter' => 'all']) }}" class="px-3 py-1.5 rounded-full text-sm {{ $filter === 'all' ? 'bg-slate-900 text-white' : 'bg-white text-gray-700 border' }}">{{ __('All') }}</a>
         <a href="{{ route('batches.index', ['filter' => 'expiring']) }}" class="px-3 py-1.5 rounded-full text-sm {{ $filter === 'expiring' ? 'bg-orange-500 text-white' : 'bg-white text-gray-700 border' }}">{{ __('Expiring soon') }}</a>

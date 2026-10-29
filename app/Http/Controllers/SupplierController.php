@@ -76,14 +76,21 @@ class SupplierController extends Controller
             'note' => ['nullable', 'string', 'max:255'],
         ]);
 
+        // v3.1.0 (M8): the supplier row is locked inside the
+        // transaction and syncBalance() (which re-locks when in a
+        // transaction) runs on the locked row, so concurrent entries
+        // serialize. No amount <= due cap is added: payments/credits
+        // above the balance are a legitimate advance to the supplier
+        // (negative balance), and the existing code never capped them.
         DB::transaction(function () use ($supplier, $data) {
-            $supplier->payments()->create([
+            $locked = Supplier::lockForUpdate()->findOrFail($supplier->id);
+            $locked->payments()->create([
                 'type' => $data['type'],
                 'amount' => $data['amount'],
                 'note' => $data['note'] ?? null,
                 'user_id' => auth()->id(),
             ]);
-            $supplier->syncBalance();
+            $locked->syncBalance();
         });
 
         $labels = ['payment' => 'Payment recorded', 'credit' => 'Credit note recorded', 'debit' => 'Debit recorded'];
@@ -100,7 +107,9 @@ class SupplierController extends Controller
     {
         abort_unless((int) $payment->supplier_id === (int) $supplier->id, 404);
 
+        // v3.1.0 (M8): lock the supplier row first (see recordPayment()).
         DB::transaction(function () use ($supplier, $payment) {
+            Supplier::lockForUpdate()->findOrFail($supplier->id);
             $payment->reverseEffect();
             $payment->delete();
             $supplier->fresh()->syncBalance();
@@ -143,7 +152,7 @@ class SupplierController extends Controller
             'id_card_number' => ['nullable', 'string', 'regex:/^\d{5}-\d{7}-\d{1}$/'],
             'current_address' => ['nullable', 'string'],
             'permanent_address' => ['nullable', 'string'],
-            'image' => ['nullable', 'image', 'max:2048'],
+            'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
         ];
     }
 
@@ -162,8 +171,13 @@ class SupplierController extends Controller
             @unlink($dir . '/' . $supplier->image);
         }
 
-        $filename = Str::random(20) . '.' . $request->file('image')->getClientOriginalExtension();
-        $request->file('image')->move($dir, $filename);
+        // v3.1.0 (L2): never trust the client-supplied extension
+        // (a script renamed .php would keep a dangerous suffix). The
+        // extension is detected from the file's actual MIME type, and
+        // the validation below additionally restricts it to image types.
+        $file = $request->file('image');
+        $filename = Str::random(20) . '.' . $file->extension();
+        $file->move($dir, $filename);
 
         return $filename;
     }

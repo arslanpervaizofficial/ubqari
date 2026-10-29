@@ -56,18 +56,24 @@ class ExpenseController extends Controller
         // again: Liabilities = Cash Management borrowing + supplier dues
         // (positive suppliers.balance only; a negative balance is an
         // advance to a supplier, not a liability).
+        // v3.1.0 (L10): identical to ReportController::capital() — the
+        // negative side is shown as its own "Advances to suppliers"
+        // asset (same source column, same (float) sum, absolute value)
+        // and added back into Net Remaining, so the two pages cannot
+        // drift apart again.
         $supplierLiabilities = (float) Supplier::where('balance', '>', 0)->sum('balance');
+        $supplierAdvances = abs((float) Supplier::where('balance', '<', 0)->sum('balance'));
         $totalLiabilities = (float) CashParty::sum('balance') + $supplierLiabilities;
         $totalInvestment = $stockValue + $cashInjected + $totalReceivables;
         // Cash Out only — Cash In is capital, not an expense (see above).
         $totalExpenses = (float) Expense::where('type', 'cash_out')->sum('amount');
-        $netRemaining = $totalInvestment - $totalExpenses - $totalLiabilities;
+        $netRemaining = $totalInvestment - $totalExpenses - $totalLiabilities + $supplierAdvances;
 
         $expenses = Expense::whereDate('expense_date', '>=', $from)->whereDate('expense_date', '<=', $to)
             ->with('user')->latest('expense_date')->latest('id')->paginate(20)->withQueryString();
 
         return view('expenses.index', compact(
-            'expenses', 'totalInvestment', 'totalExpenses', 'netRemaining', 'stockValue', 'cashInjected', 'totalReceivables', 'totalLiabilities', 'supplierLiabilities', 'from', 'to'
+            'expenses', 'totalInvestment', 'totalExpenses', 'netRemaining', 'stockValue', 'cashInjected', 'totalReceivables', 'totalLiabilities', 'supplierLiabilities', 'supplierAdvances', 'from', 'to'
         ));
     }
 

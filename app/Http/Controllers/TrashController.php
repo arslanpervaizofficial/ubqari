@@ -188,8 +188,18 @@ class TrashController extends Controller
                 }
                 if ($item->status === 'completed') {
                     foreach ($item->items()->with('product')->get() as $line) {
-                        if ($line->product && $line->product->stock < $line->quantity) {
-                            throw new \RuntimeException("Can't restore order {$item->order_number}: \"{$line->product->name}\" only has {$line->product->stock} in stock, but restoring this order would deduct {$line->quantity} again — some of it has already been sold again. Sell or adjust stock first, or leave this order in Trash.");
+                        // v3.1.0 (L11e): check against the NET quantity
+                        // (sold minus already returned), not the gross
+                        // line quantity — restoreCompletedEffects()
+                        // deducts only the net figure (H3 fix), so a
+                        // gross check both refused legitimate restores
+                        // and described the wrong deduction. This is
+                        // still only a stale-read early warning; the
+                        // locked guard inside
+                        // restoreCompletedEffects() is authoritative.
+                        $netQty = max(0, $line->quantity - $line->returns()->sum('quantity'));
+                        if ($line->product && $line->product->stock < $netQty) {
+                            throw new \RuntimeException("Can't restore order {$item->order_number}: \"{$line->product->name}\" only has {$line->product->stock} in stock, but restoring this order would deduct {$netQty} again (sold {$line->quantity}, already returned " . ($line->quantity - $netQty) . ") — some of it has already been sold again. Sell or adjust stock first, or leave this order in Trash.");
                         }
                     }
                 }

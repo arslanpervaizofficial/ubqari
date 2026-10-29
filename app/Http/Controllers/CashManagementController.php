@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use App\Models\CashParty;
 use App\Models\CashTransaction;
-use App\Models\Expense;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -22,10 +21,12 @@ class CashManagementController extends Controller
     {
         $parties = CashParty::orderByDesc('balance')->orderBy('name')->get();
         $totalOwed = $parties->sum('balance');
-        // Shown here for context next to "+ Add Capital" — same figure the
-        // Capital Report's Total/Remaining Investment cards are built from.
-        $cashInjected = (float) Expense::where('type', 'cash_in')->sum('amount');
-        return view('cash_management.index', compact('parties', 'totalOwed', 'cashInjected'));
+        // v3.1.0 (L7c): cashInjected is no longer passed here — the
+        // cash_management.index view never rendered it (the only view
+        // that did, the dead cash_management_index.blade.php, is deleted
+        // in this same batch). The Capital Report still computes its own
+        // figure; nothing on this page used this one.
+        return view('cash_management.index', compact('parties', 'totalOwed'));
     }
 
     public function storeParty(Request $request)

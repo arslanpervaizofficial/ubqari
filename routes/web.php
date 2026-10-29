@@ -30,8 +30,9 @@ use Illuminate\Support\Facades\Route;
 // ---------- Guest ----------
 Route::middleware('guest')->group(function () {
     Route::get('/login', [LoginController::class, 'showLoginForm'])->name('login');
-    // H26: throttle login attempts — 5 tries per minute per IP. This is the
-    // only throttling layer for login (no RateLimiter in LoginController).
+    // H26: throttle login attempts — 5 tries per minute per IP, plus a
+    // per-email RateLimiter inside LoginController (v3.1.0, L3), so one
+    // attacker IP-hopping against a single account is still limited.
     Route::post('/login', [LoginController::class, 'login'])->middleware('throttle:5,1');
 });
 
@@ -40,18 +41,27 @@ Route::get('/', fn () => redirect()->route('pos.index'));
 // v3.0 FEATURE 9 — online payment callbacks: OUTSIDE every middleware group.
 // Gateways post server-to-server with no shop session, so these must not sit
 // behind 'auth', and they are CSRF-exempt in bootstrap/app.php.
+// v3.1.0 (M1): throttled — callbacks are unauthenticated by design (the
+// hash check is their only auth), so a flood of forged callbacks must not
+// reach the handler unchecked. 60/minute per IP still leaves ample room
+// for legitimate gateway retries.
 Route::post('online-payments/callback/jazzcash', [OnlinePaymentController::class, 'jazzcashCallback'])
+    ->middleware('throttle:60,1')
     ->name('online-payments.callback.jazzcash');
 Route::post('online-payments/callback/easypaisa', [OnlinePaymentController::class, 'easypaisaCallback'])
+    ->middleware('throttle:60,1')
     ->name('online-payments.callback.easypaisa');
 
 // ---------- Authenticated ----------
 Route::middleware('auth')->group(function () {
     Route::post('/logout', [LoginController::class, 'logout'])->name('logout');
-    // Carry-over from the separate logout 405 patch (v2.2 era): GET /logout
-    // bhi logout kar de, warna v3.0 install karne par 405 wapas aa jata.
-    // GET route ka naam nahi rakha taake route('logout') POST wali hi rahe.
-    Route::get('/logout', [LoginController::class, 'logout']);
+    // v3.1.0 (L1): GET /logout no longer logs out directly (a GET must
+    // never change state — prefetchers/crawlers could log a user out).
+    // It renders a small confirm page whose form POSTs to route('logout')
+    // above, which stays the canonical logout. This keeps the v2.2-era
+    // 405 fix (GET /logout now shows a page instead of erroring) without
+    // the unsafe GET-logout behaviour.
+    Route::get('/logout', [LoginController::class, 'showLogoutConfirm'])->name('logout.confirm');
 
     // v3.0 FEATURE 8 — locale switch (EN | اردو toggle in the layout).
     // GET that only writes session('locale'); accepts en/ur only.
@@ -151,7 +161,9 @@ Route::middleware('auth')->group(function () {
         // temporary draft autosave, and deleting one line of a purchase
         // order (guarded inside destroyItem: only when the line has no sale).
         Route::post('purchase-orders/draft', [PurchaseOrderController::class, 'storeDraft'])->name('purchase-orders.draft');
-        Route::delete('purchase-orders/{purchaseOrder}/items/{item}', [PurchaseOrderController::class, 'destroyItem'])->name('purchase-orders.items.destroy');
+        // v3.1.0 (M3): the item-delete route MOVED to the admin-only group
+        // below (same name, same controller) — deleting a PO line is a
+        // destructive action, managers must not have it.
         Route::get('products-ajax-search', [ProductController::class, 'ajaxSearch'])->name('products.ajax-search');
 
         // Sales-order history: search/filter, edit (loads into POS billing).
@@ -212,7 +224,9 @@ Route::middleware('auth')->group(function () {
         // v3.0 FEATURE 5 — SMS (manual only): reminder button + log/send form.
         Route::post('customers/{customer}/sms-reminder', [CustomerController::class, 'sendReminder'])->name('customers.sms-reminder');
         Route::get('sms-logs', [SmsLogController::class, 'index'])->name('sms-logs.index');
-        Route::post('sms-logs', [SmsLogController::class, 'store'])->name('sms-logs.store');
+        // v3.1.0 (M5): throttled, on top of the in-controller daily cap
+        // and admin-only free-text rule in SmsLogController::store().
+        Route::post('sms-logs', [SmsLogController::class, 'store'])->middleware('throttle:10,1')->name('sms-logs.store');
 
         // v3.0 FEATURE 8 — CSV exports (same gate as the report pages).
         Route::get('reports/export/capital', [ReportExportController::class, 'capital'])->name('reports.export.capital');
@@ -227,6 +241,7 @@ Route::middleware('auth')->group(function () {
         Route::get('accounting/journal', [AccountingController::class, 'index'])->name('accounting.journal');
         Route::get('accounting/profit-loss', [AccountingController::class, 'profitLoss'])->name('accounting.profit-loss');
         Route::get('accounting/balance-sheet', [AccountingController::class, 'balanceSheet'])->name('accounting.balance-sheet');
+        Route::get('online-payments', [OnlinePaymentController::class, 'index'])->name('online-payments.index');
     });
     Route::middleware('role:admin')->group(function () {
         Route::get('accounting/opening-balance', [AccountingController::class, 'openingBalance'])->name('accounting.opening-balance');
@@ -234,11 +249,12 @@ Route::middleware('auth')->group(function () {
     });
 
     // v3.0 FEATURE 9 — online payment initiate: inside 'auth' but OUTSIDE the
-    // admin/manager group, so the controller's own "admin/manager OR the
-    // order's cashier" check can work. The ledger page itself stays
-    // admin/manager-only (unchanged), so a cashier only reaches this
-    // button if they can reach the ledger page.
+    // admin/manager group (kept here so the route file does not need to
+    // move), now ALSO gated by role:admin,manager at the route level
+    // (v3.1.0, H4) in addition to the controller's own admin/manager
+    // check — the old "or the order's cashier" branch is gone.
     Route::post('orders/{order}/pay-online', [OrderController::class, 'initiateOnlinePayment'])
+        ->middleware('role:admin,manager')
         ->name('orders.initiate-online-payment');
 
     // Admin only — every action that removes data, either by moving it to
@@ -269,6 +285,10 @@ Route::middleware('auth')->group(function () {
         Route::post('suppliers/destroy-all', [SupplierController::class, 'destroyAll'])->name('suppliers.destroy-all');
 
         Route::delete('purchase-orders/{purchaseOrder}', [PurchaseOrderController::class, 'destroy'])->name('purchase-orders.destroy');
+        // v3.1.0 (M3): MOVED here from the admin/manager group (same name,
+        // same controller) — deleting one line of a purchase order is
+        // admin-only now.
+        Route::delete('purchase-orders/{purchaseOrder}/items/{item}', [PurchaseOrderController::class, 'destroyItem'])->name('purchase-orders.items.destroy');
         Route::post('purchase-orders/destroy-selected', [PurchaseOrderController::class, 'destroySelected'])->name('purchase-orders.destroy-selected');
         Route::post('purchase-orders/destroy-all', [PurchaseOrderController::class, 'destroyAll'])->name('purchase-orders.destroy-all');
 

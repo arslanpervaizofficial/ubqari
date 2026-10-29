@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
@@ -34,8 +35,13 @@ class BackupController extends Controller
      *
      *  Feature 7: the payload is built by BackupService — the same code
      *  path the scheduled command uses — so a manual download and a
-     *  scheduled file are the same export. Filenames, JSON flags and
-     *  response headers below are unchanged from before. */
+     *  scheduled file are the same export. Filenames and response
+     *  headers below are unchanged from before.
+     *
+     *  v3.1.0 (H3): the streamed file is ENCRYPTED (see
+     *  BackupService::encodeBackup) — it is still a .json document,
+     *  but its tables live inside an encrypted payload string, never
+     *  in plain text. Only this app (with its APP_KEY) can restore it. */
     public function download(Request $request)
     {
         $type = $request->input('type') === 'range' ? 'range' : 'full';
@@ -57,7 +63,7 @@ class BackupController extends Controller
             $filename = 'ubqari-pos-backup-full-' . now()->format('Y-m-d_His') . '.json';
         }
 
-        $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        $json = $service->encodeBackup($payload);
 
         return response($json, 200, [
             'Content-Type' => 'application/json',
@@ -125,15 +131,24 @@ class BackupController extends Controller
      *  file happens to carry in full. */
     public function restore(Request $request)
     {
+        // v3.1.0 (L5): destructive action — the admin must re-enter
+        // their current password (the 'current_password' rule checks it
+        // against the logged-in user) before any restore runs.
         $request->validate([
             'backup_file' => ['required', 'file', 'max:51200'], // 50MB
+            'current_password' => ['required', 'current_password'],
         ]);
 
         $content = file_get_contents($request->file('backup_file')->getRealPath());
-        $data = json_decode($content, true);
+        // v3.1.0 (H3): decrypt-or-plain — encrypted v3.1.0 backups are
+        // decrypted with APP_KEY, and OLD unencrypted backups still
+        // restore unchanged (see BackupService::decodeBackup). A file
+        // that decrypts to nothing (wrong key, corrupt file) is
+        // rejected here, before any table is touched.
+        $data = app(BackupService::class)->decodeBackup($content);
 
         if (!is_array($data) || !isset($data['meta']['type']) || !isset($data['tables']) || !is_array($data['tables'])) {
-            return back()->withErrors(['backup_file' => 'This file does not look like a valid Ubqari POS backup.']);
+            return back()->withErrors(['backup_file' => 'This file does not look like a valid Ubqari POS backup, or it was encrypted with a different app key.']);
         }
 
         $type = $data['meta']['type'] === 'range' ? 'range' : 'full';
@@ -200,7 +215,10 @@ class BackupController extends Controller
         } catch (\Throwable $e) {
             DB::rollBack();
             DB::statement('SET FOREIGN_KEY_CHECKS=1');
-            return back()->withErrors(['backup_file' => 'Restore failed, nothing was changed: ' . $e->getMessage()]);
+            // v3.1.0 (L5): never leak internals (table/column details)
+            // to the browser — generic message here, detail in the log.
+            Log::error('Backup restore failed.', ['exception' => $e->getMessage()]);
+            return back()->withErrors(['backup_file' => 'Restore failed, nothing was changed.']);
         }
 
         // v2.2 (F9): drop drafts whose user or supplier no longer
@@ -259,8 +277,12 @@ class BackupController extends Controller
      *  back in with the one-time password. */
     public function reset(Request $request)
     {
+        // v3.1.0 (L5): same current-password re-entry as restore() —
+        // wiping the whole database must never ride on a stale session
+        // alone. The form field lives in backup/index.blade.php.
         $request->validate([
             'confirm' => ['required', 'in:RESET'],
+            'current_password' => ['required', 'current_password'],
         ]);
 
         DB::beginTransaction();
@@ -311,7 +333,9 @@ class BackupController extends Controller
         } catch (\Throwable $e) {
             DB::rollBack();
             DB::statement('SET FOREIGN_KEY_CHECKS=1');
-            return back()->withErrors(['confirm' => 'Reset failed, nothing was changed: ' . $e->getMessage()]);
+            // v3.1.0 (L5): generic message to the browser, detail logged.
+            Log::error('Database reset failed.', ['exception' => $e->getMessage()]);
+            return back()->withErrors(['confirm' => 'Reset failed, nothing was changed.']);
         }
 
         Auth::logout();

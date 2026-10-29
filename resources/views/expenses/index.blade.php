@@ -60,7 +60,12 @@
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">{{ __('Net Investment Remaining') }}</div>
         <div class="text-2xl font-bold {{ $netRemaining < 0 ? 'text-red-600' : '' }}">{{ number_format($netRemaining, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1">{{ __('Investment − Expenses − Liabilities (Cash borrowing') }} {{ number_format($totalLiabilities - ($supplierLiabilities ?? 0), 2) }} + {{ __('Supplier dues') }} {{ number_format($supplierLiabilities ?? 0, 2) }}{{ __(') — same figure as "Net Capital" on the Capital Report') }}</div>
+        <div class="text-xs text-gray-400 mt-1">{{ __('Investment − Expenses − Liabilities (Cash borrowing') }} {{ number_format($totalLiabilities - ($supplierLiabilities ?? 0), 2) }} + {{ __('Supplier dues') }} {{ number_format($supplierLiabilities ?? 0, 2) }} + {{ __('Advances to Suppliers') }} {{ number_format($supplierAdvances ?? 0, 2) }}{{ __(') — same figure as "Net Capital" on the Capital Report') }}</div>
+    </div>
+    <div class="bg-white p-5 rounded-xl shadow-sm">
+        <div class="text-gray-500 text-sm">{{ __('Advances to Suppliers') }}</div>
+        <div class="text-2xl font-bold {{ ($supplierAdvances ?? 0) > 0 ? 'text-blue-700' : '' }}">{{ number_format($supplierAdvances ?? 0, 2) }}</div>
+        <div class="text-xs text-gray-400 mt-1">{{ __('Negative supplier balances — money paid to suppliers in advance, owed back to the business (from') }} <a href="{{ route('suppliers.index') }}" class="underline">{{ __('Suppliers') }}</a>{{ __(') — now added above in Net Investment Remaining') }}</div>
     </div>
 </div>
 <p class="text-xs text-gray-400 mb-6">{{ __('These three figures are your current overall standing (as of right now) — the date filter below only controls which past entries show in the table, it doesn\'t change these.') }}</p>

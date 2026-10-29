@@ -40,6 +40,9 @@
     <p class="text-sm text-gray-500 mb-3">
         {{ __('Every day at 02:00 the system automatically saves a full backup to the server (storage/app/backups) and keeps only the last 7 — older ones are deleted automatically. This only runs if the server has its scheduled-tasks cron entry set up; otherwise no automatic backup is made.') }}
     </p>
+    <p class="text-sm text-gray-500 mb-3">
+        {{ __('Backups (automatic files and downloads) are encrypted with the app key — keep a copy of the key with the backups, because losing it makes encrypted backups unrecoverable.') }}
+    </p>
     <p class="text-sm text-gray-800 mb-3">
         {{ __('Last automatic backup') }}:
         @if(!empty($latestScheduledBackup))
@@ -96,15 +99,21 @@
             </div>
             <input type="file" id="backup-file-input" name="backup_file" accept="application/json,.json" required data-label="Backup file" class="hidden">
         </div>
+        <div>
+            <label class="block text-xs text-gray-500 mb-1">{{ __('Your current password') }}</label>
+            <input type="password" name="current_password" required autocomplete="current-password" placeholder="{{ __('Current password') }}" class="border rounded px-3 py-2">
+        </div>
         <button class="btn btn-solid-yellow">{{ __('Restore Backup') }}</button>
     </form>
     @error('backup_file') <p class="text-red-600 text-sm mt-2">{{ $message }}</p> @enderror
+    @error('current_password') <p class="text-red-600 text-sm mt-2">{{ $message }}</p> @enderror
 </div>
 
 <div class="bg-white p-6 rounded-xl shadow-sm w-full mt-6 border-2 border-red-200">
     <h2 class="font-semibold text-red-700 mb-1">{{ __('Danger Zone — Reset Database') }}</h2>
     <p class="text-sm text-gray-500 mb-3">
-        {{ __('Permanently erases') }} <strong>{{ __('everything') }}</strong> {{ __('— products, customers, suppliers, orders, purchase orders, stock movements, payments, stock returns, and every user account. This cannot be undone from inside the app; the only way back is restoring a backup taken beforehand. A single default admin account (') }}<code class="bg-gray-100 px-1 rounded">admin@ubqari.pos</code> / <code class="bg-gray-100 px-1 rounded">password</code>{{ __(') is recreated automatically so the system isn\'t left completely locked out — log in with it and change the password right away.') }}
+        {{ __('Permanently erases') }} <strong>{{ __('everything') }}</strong> {{ __('— products, customers, suppliers, orders, purchase orders, stock movements, payments, stock returns, and every user account. This cannot be undone from inside the app; the only way back is restoring a backup taken beforehand. A single admin account is recreated automatically so the system isn\'t left completely locked out — reset creates a random one-time password shown once, which must be changed at first login.') }}
+
     </p>
     <form method="POST" action="{{ route('backup.reset') }}" novalidate
           class="flex flex-wrap items-end gap-2 confirm-submit"
@@ -114,9 +123,14 @@
             <label class="block text-xs text-gray-500 mb-1">{{ __('Type') }} <strong>{{ __('RESET') }}</strong> {{ __('to confirm') }}</label>
             <input type="text" name="confirm" required autocomplete="off" placeholder="{{ __('RESET') }}" class="border rounded px-3 py-2 border-red-300">
         </div>
+        <div>
+            <label class="block text-xs text-gray-500 mb-1">{{ __('Your current password') }}</label>
+            <input type="password" name="current_password" required autocomplete="current-password" placeholder="{{ __('Current password') }}" class="border rounded px-3 py-2 border-red-300">
+        </div>
         <button class="btn btn-red">{{ __('Reset Entire Database') }}</button>
     </form>
     @error('confirm') <p class="text-red-600 text-sm mt-2">{{ $message }}</p> @enderror
+    @error('current_password') <p class="text-red-600 text-sm mt-2">{{ $message }}</p> @enderror
 </div>
 
 <script>

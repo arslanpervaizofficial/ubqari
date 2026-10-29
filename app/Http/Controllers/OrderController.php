@@ -2,10 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Customer;
 use App\Models\Order;
 use App\Services\PaymentGatewayService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class OrderController extends Controller
 {
@@ -113,11 +115,11 @@ class OrderController extends Controller
                 ->each(function ($stray) {
                     // Empty cart: permanently discard, never send to Trash
                     // (same v1.4 rule POSController already uses).
-                    $stray->items()->count() > 0 ? $stray->update(['status' => 'hold']) : $stray->forceDelete();
+                    $stray->items()->count() > 0 ? $stray->forceFill(['status' => 'hold'])->save() : $stray->forceDelete();
                 });
 
             $order->reverseCompletedEffects();
-            $order->update(['status' => 'in_progress']);
+            $order->forceFill(['status' => 'in_progress'])->save();
         });
 
         request()->session()->put('current_order_id', $order->id);
@@ -201,10 +203,6 @@ class OrderController extends Controller
             'note' => ['nullable', 'string', 'max:255'],
         ]);
 
-        if ($data['type'] === 'credit' && $data['amount'] > $order->due_amount) {
-            return back()->withErrors(['amount' => "Amount ({$data['amount']}) is more than what's still due on this order ({$order->due_amount})."]);
-        }
-
         // FIXED (H4): the order ledger and the customer's running balance
         // used to be two ledgers for the same debt, and only the order
         // one was updated here — Capital Receivables and the POS
@@ -220,8 +218,35 @@ class OrderController extends Controller
         // complete()), so adjusting it here would double-count — the
         // completion step adds the (then current) due exactly once.
         // Walk-in orders have no customer, so nothing extra is adjusted.
+        //
+        // v3.1.0 (M8): the order row is locked inside the transaction
+        // and the credit cap is re-validated against the LOCKED due —
+        // the old pre-transaction cap read a stale due, so two
+        // simultaneous credits could both pass it and over-collect.
+        // Lock + re-check also defeats a sequential double-click: the
+        // second POST sees the reduced due and fails the re-check, so
+        // no separate idempotency key is needed for this endpoint.
+        // Status: in_progress/hold orders are INTENTIONALLY still
+        // allowed — POSController::complete() explicitly reconciles
+        // pre-existing ledger payments at completion (v2.2 R1 delta
+        // row), which only makes sense if payments can pre-date
+        // completion, and the scope comment above contemplates
+        // in_progress payments. Only 'cancelled' is rejected: a
+        // cancelled order never happened (and initiateOnlinePayment
+        // already refuses cancelled orders), so no payment against it
+        // is ever legitimate. POS complete() itself never calls this
+        // method — it writes OrderPayment rows directly.
         DB::transaction(function () use ($order, $data) {
-            $order->payments()->create([
+            $locked = Order::lockForUpdate()->findOrFail($order->id);
+
+            if ($locked->status === 'cancelled') {
+                throw ValidationException::withMessages(['error' => 'Payments cannot be recorded on a cancelled order.']);
+            }
+            if ($data['type'] === 'credit' && $data['amount'] > (float) $locked->due_amount) {
+                throw ValidationException::withMessages(['amount' => "Amount ({$data['amount']}) is more than what's still due on this order ({$locked->due_amount})."]);
+            }
+
+            $locked->payments()->create([
                 'type' => $data['type'],
                 'amount' => $data['amount'],
                 'note' => $data['note'] ?? null,
@@ -229,15 +254,18 @@ class OrderController extends Controller
             ]);
 
             if ($data['type'] === 'credit') {
-                $order->decrement('due_amount', $data['amount']);
-                $order->increment('paid_amount', $data['amount']);
-                if ($order->customer_id && $order->status === 'completed') {
-                    $order->customer()->decrement('credit_balance', $data['amount']);
+                $locked->decrement('due_amount', $data['amount']);
+                $locked->increment('paid_amount', $data['amount']);
+                if ($locked->customer_id && $locked->status === 'completed') {
+                    // Locked when present; a trashed/missing customer
+                    // keeps the old silent no-op (the order payment
+                    // itself still records) instead of 404ing.
+                    Customer::lockForUpdate()->find($locked->customer_id)?->decrement('credit_balance', $data['amount']);
                 }
             } else {
-                $order->increment('due_amount', $data['amount']);
-                if ($order->customer_id && $order->status === 'completed') {
-                    $order->customer()->increment('credit_balance', $data['amount']);
+                $locked->increment('due_amount', $data['amount']);
+                if ($locked->customer_id && $locked->status === 'completed') {
+                    Customer::lockForUpdate()->find($locked->customer_id)?->increment('credit_balance', $data['amount']);
                 }
             }
         });
@@ -250,12 +278,9 @@ class OrderController extends Controller
      *  The ONLY method added to OrderController by this feature; every
      *  other method above is the v2.2 version untouched.
      *
-     *  Access mirrors the ledger page's intent: admin/manager, or the
-     *  cashier who owns the order (order->user_id). NOTE for the
-     *  coordinator: the ledger route itself lives in the admin/manager
-     *  group, so put THIS route in the plain 'auth' group (see
-     *  routes-fragment.txt) or the cashier branch can never be reached
-     *  — the controller check below is still the enforcement point.
+     *  v3.1.0 (H4): access is admin/manager ONLY — the old "or the
+     *  order's cashier" branch is removed (see initiateOnlinePayment
+     *  below). The route also carries role:admin,manager middleware.
      *
      *  Validates gateway (jazzcash/easypaisa only) and amount > 0, and
      *  — beyond the spec's minimum, because recordPayment() itself
@@ -268,8 +293,13 @@ class OrderController extends Controller
      *  verified callback in OnlinePaymentController. */
     public function initiateOnlinePayment(Request $request, Order $order)
     {
+        // v3.1.0 (H4): admin/manager ONLY. The old "or the order's
+        // cashier" branch is removed: a cashier must never reach the
+        // gateway hosted-checkout form. The pp_Password field in that
+        // form is deliberately NOT stripped — the gateway requires it
+        // in the browser POST; the role gate above is the fix.
         $user = $request->user();
-        if (!in_array($user->role, ['admin', 'manager'], true) && $order->user_id !== $user->id) {
+        if (!in_array($user->role, ['admin', 'manager'], true)) {
             abort(403, 'You do not have permission to access this page.');
         }
 

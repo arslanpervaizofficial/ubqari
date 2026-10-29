@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -17,10 +18,27 @@ use Illuminate\Support\Facades\DB;
  *
  * The table list is the v2.2 list (see BackupController's history): the
  * original list plus purchase_order_drafts (v2.2 F9), order_payments and
- * app_settings (v2 H18). Framework-internal tables (sessions, cache,
- * jobs, migrations, password_reset_tokens) are deliberately excluded —
+ * app_settings (v2 H18) — plus, in v3.1.0 (H2), every v3 table that
+ * was missing (supplier_payments, product_batches, stock_counts,
+ * stock_count_items, audit_logs, sms_logs, journal_entries,
+ * journal_lines, online_payments), checked against migrations
+ * 000003–000010. Framework-internal tables (sessions, cache, jobs,
+ * migrations, password_reset_tokens) are deliberately excluded —
  * restoring those would fight the running app instead of restoring
  * business data.
+ *
+ * v3.1.0 (H3) ENCRYPTION: encodeBackup() / decodeBackup() are the only
+ * way a backup payload leaves or enters the system. The payload is
+ * encrypted with Laravel Crypt (APP_KEY) and wrapped as
+ *   { "meta": {..., "encrypted": true}, "payload": "<encrypted string>" }
+ * so a downloaded file or a scheduled file on disk never contains
+ * business data — or app_settings secrets (SMS key, gateway
+ * credentials) — in plain text. decodeBackup() still accepts OLD
+ * unencrypted backups ({ "meta": ..., "tables": ... }) unchanged, so
+ * backups taken before v3.1.0 still restore. WARNING (for the README):
+ * losing APP_KEY makes encrypted backups UNRECOVERABLE — there is no
+ * fallback key and no way to decrypt them afterwards, so keep a copy
+ * of the key with the backups, not only inside the app.
  *
  * Filesystem note: scheduled files are written with storage_path() to
  * storage/app/backups, NOT through Storage::disk('local') — in this
@@ -62,6 +80,24 @@ class BackupService
         'expenses',
         'cash_parties',
         'cash_transactions',
+        // v3.1.0 (H2): every v3 table, in insert-safe order. Parents
+        // sit before the children that reference them: supplier_payments
+        // needs suppliers; product_batches needs products and
+        // purchase_orders; stock_count_items needs stock_counts and
+        // products; audit_logs/sms_logs need users/customers (nullable);
+        // journal_lines needs journal_entries; online_payments needs
+        // orders. Restore additionally disables foreign-key checks (see
+        // BackupController), so this order is a second safety net, not
+        // the only one.
+        'supplier_payments',
+        'product_batches',
+        'stock_counts',
+        'stock_count_items',
+        'audit_logs',
+        'sms_logs',
+        'journal_entries',
+        'journal_lines',
+        'online_payments',
         // v2 (H18): app_settings was also missing, even though
         // reset() deletes it — so a full restore never brought settings
         // back. It has no foreign keys, so it sits last in insert order.
@@ -159,6 +195,17 @@ class BackupService
                 'purchase_order_id',
                 DB::table('purchase_orders')->whereBetween('created_at', [$from, $to])->pluck('id')
             ),
+            // v3.1.0 (H2): line-item tables of v3, scoped through their
+            // parent like order_items above. Every other v3 table has
+            // its own created_at and uses the default branch below.
+            'stock_count_items' => DB::table('stock_count_items')->whereIn(
+                'stock_count_id',
+                DB::table('stock_counts')->whereBetween('created_at', [$from, $to])->pluck('id')
+            ),
+            'journal_lines' => DB::table('journal_lines')->whereIn(
+                'journal_entry_id',
+                DB::table('journal_entries')->whereBetween('created_at', [$from, $to])->pluck('id')
+            ),
             // These two have their own business date, separate from
             // created_at (an expense/cash entry can be logged today for an
             // earlier date) — scope by that instead, same reasoning as
@@ -170,6 +217,81 @@ class BackupService
         };
 
         return $query->get()->map(fn ($row) => (array) $row)->all();
+    }
+
+    /**
+     * v3.1.0 (H3): encode a backup payload for storage/download.
+     * Returns a JSON string: the payload's own meta (plus
+     * encrypted=true) alongside the Crypt-encrypted payload JSON.
+     * The inner JSON is encoded with the same flags fullExport() used
+     * to use for the outer document, so a decrypted payload is
+     * byte-identical in shape to a pre-v3.1.0 backup.
+     */
+    public function encodeBackup(array $payload): string
+    {
+        $meta = $payload['meta'] ?? [];
+        $meta['encrypted'] = true;
+        $inner = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        if ($inner === false) {
+            throw new \RuntimeException('Failed to encode backup JSON: ' . json_last_error_msg());
+        }
+
+        $wrapped = json_encode(['meta' => $meta, 'payload' => Crypt::encryptString($inner)], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        if ($wrapped === false) {
+            throw new \RuntimeException('Failed to encode encrypted backup JSON: ' . json_last_error_msg());
+        }
+
+        return $wrapped;
+    }
+
+    /**
+     * v3.1.0 (H3): decode a backup document back to its payload, or
+     * null when it is neither format. Accepts, in order:
+     *   1. an encrypted wrapper ({ "meta": ..., "payload": "..." }) —
+     *      decrypts with Crypt (APP_KEY) and decodes the inner JSON;
+     *   2. a plain pre-v3.1.0 backup ({ "meta": ..., "tables": ... })
+     *      — returned as-is (decrypt-or-plain fallback);
+     *   3. a bare encrypted string (no JSON at all) — decrypted, then
+     *      decoded. This covers a file saved from an encrypted string
+     *      directly rather than through encodeBackup().
+     * A wrapper whose payload fails to decrypt (wrong APP_KEY, corrupt
+     * file) returns null — the caller reports it as an invalid backup
+     * rather than half-restoring anything. Note: a decrypt failure
+     * caused by a lost/changed APP_KEY is unrecoverable by design.
+     */
+    public function decodeBackup(string $content): ?array
+    {
+        $data = json_decode($content, true);
+        if (is_array($data) && isset($data['payload']) && is_string($data['payload'])) {
+            try {
+                $inner = Crypt::decryptString($data['payload']);
+            } catch (\Throwable $e) {
+                return null;
+            }
+            $payload = json_decode($inner, true);
+            if (!is_array($payload) || !isset($payload['meta']['type']) || !isset($payload['tables']) || !is_array($payload['tables'])) {
+                return null;
+            }
+
+            return $payload;
+        }
+
+        if (is_array($data) && isset($data['meta']['type']) && isset($data['tables']) && is_array($data['tables'])) {
+            return $data;
+        }
+
+        // Bare encrypted string fallback.
+        try {
+            $inner = Crypt::decryptString(trim($content));
+        } catch (\Throwable $e) {
+            return null;
+        }
+        $payload = json_decode($inner, true);
+        if (!is_array($payload) || !isset($payload['meta']['type']) || !isset($payload['tables']) || !is_array($payload['tables'])) {
+            return null;
+        }
+
+        return $payload;
     }
 
     /** Absolute path of the scheduled-backups directory. */
@@ -215,10 +337,8 @@ class BackupService
         }
 
         $payload = $this->fullExport();
-        $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-        if ($json === false) {
-            throw new \RuntimeException('Failed to encode backup JSON: ' . json_last_error_msg());
-        }
+        // v3.1.0 (H3): scheduled files are encrypted, like downloads.
+        $json = $this->encodeBackup($payload);
 
         // Same-second rerun must not silently overwrite the earlier file.
         $filename = $this->scheduledFilename();

@@ -29,6 +29,10 @@ return Application::configure(basePath: dirname(__DIR__))
         // session read depends on.
         $middleware->web(append: [
             \App\Http\Middleware\SetLocale::class,
+            // v3.1.0 (H5): forced password change. Appended after
+            // SetLocale, same pattern: it runs after StartSession, so
+            // the logged-in user is available to check.
+            \App\Http\Middleware\ForcePasswordChange::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

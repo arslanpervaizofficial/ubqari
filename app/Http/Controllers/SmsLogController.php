@@ -23,9 +23,16 @@ class SmsLogController extends Controller
     }
 
     /** MANUAL ONLY: one SMS, only when a user submits this form. Pick a
-     *  customer or type a phone number (typed phone wins if both are
-     *  given), type the message, send. SmsService::send() writes the
-     *  SmsLog row — this method writes no second row. */
+     *  customer or type a phone number, type the message, send.
+     *  SmsService::send() writes the SmsLog row — this method writes no
+     *  second row.
+     *
+     *  v3.1.0 (M5): if a customer is picked, THEIR stored phone is used
+     *  (a typed number can no longer redirect a customer's reminder to
+     *  an arbitrary number). A free-text phone with no customer is
+     *  admin-only. A per-user daily cap (50/day) applies on top of the
+     *  route throttle (throttle:10,1) — sms_logs has a user_id column,
+     *  so the cap is enforceable and is NOT deferred. */
     public function store(Request $request)
     {
         $data = $request->validate([
@@ -34,12 +41,30 @@ class SmsLogController extends Controller
             'message' => ['required', 'string', 'max:1000'],
         ]);
 
+        // Per-user daily cap: 50 logged sends per user per day.
+        $sentToday = SmsLog::where('user_id', auth()->id())
+            ->whereDate('created_at', today())
+            ->count();
+        if ($sentToday >= 50) {
+            return back()->withInput()->withErrors([
+                'message' => 'Daily SMS limit reached (50 per user). Please try again tomorrow.',
+            ]);
+        }
+
         $customer = $data['customer_id'] ? Customer::find($data['customer_id']) : null;
 
-        // Typed phone wins; otherwise fall back to the chosen customer's
-        // number. A customer_id that passed validation but resolves to
-        // nothing here (e.g. soft-deleted) has no usable number either.
-        $phone = $request->filled('phone') ? $data['phone'] : ($customer?->phone);
+        if ($customer) {
+            // Stored phone wins when a customer is picked.
+            $phone = $customer->phone;
+        } else {
+            // Free-text phone with no customer: admin role only.
+            if (!$request->user() || !$request->user()->isAdmin()) {
+                return back()->withInput()->withErrors([
+                    'phone' => 'Pick a customer to send to. Typing a phone number directly is admin-only.',
+                ]);
+            }
+            $phone = $data['phone'] ?? null;
+        }
 
         if (empty($phone)) {
             return back()->withInput()->withErrors([

@@ -13,11 +13,13 @@ use Symfony\Component\HttpFoundation\Response;
  * allows only 'en' and 'ur', and applies it for the current request.
  * Anything else falls back to 'en' and is never passed to setLocale().
  *
- * Registration is the coordinator's job (bootstrap/app.php):
- *   $middleware->alias(['locale' => \App\Http\Middleware\SetLocale::class]);
- * and the alias must be added to the 'web' middleware group (or applied
- * to the authenticated route group) so session() is available here.
- * This file alone does not change any existing middleware wiring.
+ * Registration is the coordinator's job (bootstrap/app.php), where
+ * this middleware is APPENDED to the 'web' group (not registered under
+ * a 'locale' alias):
+ *   $middleware->web(append: [\App\Http\Middleware\SetLocale::class]);
+ * Appending it to 'web' is what makes session() available here, since
+ * it then runs after StartSession. This file alone does not change any
+ * existing middleware wiring.
  */
 class SetLocale
 {

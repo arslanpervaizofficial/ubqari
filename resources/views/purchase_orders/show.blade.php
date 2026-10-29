@@ -147,7 +147,9 @@ function makeEditable(span, { onSave }) {
 
 document.querySelectorAll('#po-items-table tr[data-item-id]').forEach(tr => {
     const itemId = tr.dataset.itemId;
-    const url = `{{ url('purchase-orders/' . $purchaseOrder->id . '/items') }}/${itemId}`;
+    // v3.1.0 (L7d): rendered from the named route
+    // (purchase-orders.update-item) instead of a hand-built url() string.
+    const url = '{{ route('purchase-orders.update-item', ['purchaseOrder' => $purchaseOrder->id, 'item' => '__ITEM_ID__']) }}'.replace('__ITEM_ID__', itemId);
 
     tr.querySelectorAll('.editable-field').forEach(span => {
         const field = span.dataset.field;

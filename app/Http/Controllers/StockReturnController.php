@@ -14,6 +14,7 @@ use App\Models\StockReturn;
 use App\Models\Supplier;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class StockReturnController extends Controller
 {
@@ -147,8 +148,9 @@ class StockReturnController extends Controller
      *  Accepts one or more line items in a single submission so a customer
      *  returning several different products doesn't need a separate form
      *  submission for each one. Each line is either tied to an order_item
-     *  (loaded via lookupOrder(), discount carried over from the original
-     *  sale) or a manually-added product with its own typed-in discount. */
+     *  (loaded via lookupOrder(); v3.1.0 H10: linked lines are priced
+     *  from the SOURCE order item, submitted prices ignored) or a
+     *  manually-added product with its own typed-in discount. */
     public function customerStore(Request $request)
     {
         $data = $request->validate([
@@ -162,55 +164,73 @@ class StockReturnController extends Controller
             'items.*.reason' => ['nullable', 'string', 'max:255'],
         ]);
 
-        // A line loaded from a real order must never return more than what's
-        // actually still outstanding on that order item — re-checked here
-        // against the database, not just the number the browser sent, in
-        // case two return submissions for the same order overlapped.
-        // H9 — the line must also belong to that order item: same product,
-        // same customer, and a completed order. Without this, a crafted
-        // or mis-clicked submission could return product A against order
-        // item B (or credit the wrong customer) while every "remaining"
-        // check still passed.
-        foreach ($data['items'] as $line) {
-            if (!empty($line['order_item_id'])) {
-                $orderItem = OrderItem::find($line['order_item_id']);
-                if (!$orderItem || !$orderItem->order) {
-                    return back()->withInput()->withErrors([
-                        'quantity' => 'A return line names an order item that no longer exists.',
-                    ]);
+        // v3.1.0 (H9): EVERY quantity/belonging check below runs
+        // INSIDE the transaction on lockForUpdate rows (order items,
+        // orders, products, customer), and remaining is recomputed
+        // after locking — the old pre-transaction checks read stale
+        // values, so two overlapping submissions could both pass them
+        // and over-return. A rejection throws ValidationException,
+        // which rolls the transaction back and redirects back with
+        // errors (same UX as the old withErrors returns). Quantities
+        // are aggregated per order item first, so the same item on
+        // two lines cannot over-return in one submission. Over-returns
+        // are REJECTED, never clamped.
+        DB::transaction(function () use ($data) {
+            $customer = !empty($data['customer_id'])
+                ? Customer::lockForUpdate()->find($data['customer_id'])
+                : null;
+
+            $linkedItemIds = collect($data['items'])
+                ->pluck('order_item_id')->filter()->unique()->sort()->values()->all();
+            $orderItems = OrderItem::whereIn('id', $linkedItemIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $orderIds = $orderItems->pluck('order_id')->unique()->sort()->values()->all();
+            $orders = Order::whereIn('id', $orderIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $productIds = collect($data['items'])->pluck('product_id')->unique()->sort()->values()->all();
+            $products = Product::whereIn('id', $productIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+
+            $requestedByItem = [];
+            foreach ($data['items'] as $line) {
+                if (!empty($line['order_item_id'])) {
+                    $requestedByItem[$line['order_item_id']] = ($requestedByItem[$line['order_item_id']] ?? 0) + (float) $line['quantity'];
+                }
+            }
+
+            foreach ($data['items'] as $line) {
+                if (empty($line['order_item_id'])) {
+                    continue;
+                }
+                $orderItem = $orderItems->get($line['order_item_id']);
+                if (!$orderItem) {
+                    throw ValidationException::withMessages(['quantity' => 'A return line names an order item that no longer exists.']);
+                }
+                $order = $orders->get($orderItem->order_id);
+                if (!$order) {
+                    throw ValidationException::withMessages(['quantity' => 'A return line names an order that is no longer available.']);
                 }
                 if ((int) $line['product_id'] !== (int) $orderItem->product_id) {
-                    return back()->withInput()->withErrors([
-                        'quantity' => "Product mismatch: this return line's product does not match the order item it was loaded from.",
-                    ]);
+                    throw ValidationException::withMessages(['quantity' => "Product mismatch: this return line's product does not match the order item it was loaded from."]);
                 }
-                if ($orderItem->order->status !== 'completed') {
-                    return back()->withInput()->withErrors([
-                        'quantity' => "Order {$orderItem->order->order_number} is not completed, so nothing from it can be returned.",
-                    ]);
+                if ($order->status !== 'completed') {
+                    throw ValidationException::withMessages(['quantity' => "Order {$order->order_number} is not completed, so nothing from it can be returned."]);
                 }
                 // Loose comparison on purpose: the form posts strings,
                 // the order stores ints, and null (walk-in) must only
                 // match null — null == 0 is false in PHP, so this is safe.
-                if ($orderItem->order->customer_id != ($data['customer_id'] ?? null)) {
-                    return back()->withInput()->withErrors([
-                        'quantity' => 'Customer mismatch: this return line belongs to a different customer than the one selected.',
-                    ]);
-                }
-                $remaining = $orderItem->remainingReturnableQuantity();
-                if ($line['quantity'] > $remaining) {
-                    return back()->withInput()->withErrors([
-                        'quantity' => "{$orderItem?->product?->name}: only {$remaining} {$orderItem?->product?->unit} left returnable from that order — the rest was already returned.",
-                    ]);
+                if ($order->customer_id != ($data['customer_id'] ?? null)) {
+                    throw ValidationException::withMessages(['quantity' => 'Customer mismatch: this return line belongs to a different customer than the one selected.']);
                 }
             }
-        }
-
-        DB::transaction(function () use ($data) {
-            $customer = !empty($data['customer_id']) ? Customer::find($data['customer_id']) : null;
+            foreach ($requestedByItem as $itemId => $requested) {
+                $orderItem = $orderItems->get($itemId);
+                $remaining = $orderItem->remainingReturnableQuantity();
+                if ($requested > $remaining) {
+                    $product = $products->get($orderItem->product_id);
+                    throw ValidationException::withMessages(['quantity' => "{$product?->name}: only {$remaining} {$product?->unit} left returnable from that order — the rest was already returned."]);
+                }
+            }
 
             foreach ($data['items'] as $line) {
-                $product = Product::findOrFail($line['product_id']);
+                $product = $products->get($line['product_id']) ?? Product::findOrFail($line['product_id']);
                 $product->increment('stock', $line['quantity']);
 
                 // v3.0 FEATURE 1 — customer returns go back into
@@ -219,13 +239,30 @@ class StockReturnController extends Controller
                 // quantity); any remainder — or the whole quantity when
                 // the product has no batches at all — lands in an
                 // "UNBATCHED" batch (created if needed). Supplier
-                // returns deliberately do NOT touch batches (see
-                // supplierStore(), unchanged). restoreReturned() never
-                // throws, so a batch problem can never fail a return.
-                ProductBatch::restoreReturned((int) $product->id, (float) $line['quantity']);
+                // returns mirror the other way (see supplierStore()).
+                // restoreReturned() never throws, so a batch problem
+                // can never fail a return (v3.1.0 H8: failures are
+                // logged with context and surfaced after the txn).
+                ProductBatch::restoreReturned((int) $product->id, (float) $line['quantity'], ['record' => 'Customer return']);
 
-                $discountPercent = $line['discount_percent'] ?? 0;
-                $gross = $line['quantity'] * $line['unit_price'];
+                // v3.1.0 (H10): a linked line uses the SOURCE order
+                // item's price/discount — submitted values are ignored
+                // for linked lines (the form pre-fills them from the
+                // lookup, but a crafted POST must not reprice a
+                // return). Typed values are allowed ONLY for unlinked
+                // manual lines, which are flagged in the return note
+                // (no dedicated flag column exists on stock_returns).
+                $orderItem = !empty($line['order_item_id']) ? $orderItems->get($line['order_item_id']) : null;
+                if ($orderItem) {
+                    $unitPrice = (float) $orderItem->unit_price;
+                    $discountPercent = (float) $orderItem->discount_percent;
+                    $reason = $line['reason'] ?? null;
+                } else {
+                    $unitPrice = (float) $line['unit_price'];
+                    $discountPercent = (float) ($line['discount_percent'] ?? 0);
+                    $reason = trim(($line['reason'] ? $line['reason'] . ' ' : '') . '(manual price)');
+                }
+                $gross = $line['quantity'] * $unitPrice;
                 $discountAmount = round($gross * ($discountPercent / 100), 2);
                 $netAmount = round($gross - $discountAmount, 2);
 
@@ -234,12 +271,12 @@ class StockReturnController extends Controller
                     'product_id' => $product->id,
                     'customer_id' => $data['customer_id'] ?? null,
                     'order_item_id' => $line['order_item_id'] ?? null,
-                    'order_id' => !empty($line['order_item_id']) ? OrderItem::find($line['order_item_id'])?->order_id : null,
+                    'order_id' => $orderItem?->order_id,
                     'quantity' => $line['quantity'],
-                    'unit_price' => $line['unit_price'],
+                    'unit_price' => $unitPrice,
                     'discount_percent' => $discountPercent,
                     'discount_amount' => $discountAmount,
-                    'reason' => $line['reason'] ?? null,
+                    'reason' => $reason,
                     'user_id' => auth()->id(),
                 ]);
 
@@ -251,6 +288,20 @@ class StockReturnController extends Controller
                     'user_id' => auth()->id(),
                     'stock_return_id' => $stockReturn->id,
                 ]);
+
+                // v3.1.0 (H11): a linked return reduces the SOURCE
+                // order's due_amount in this same transaction — named
+                // AND walk-in orders alike — so the returned amount
+                // cannot be collected again through the order ledger
+                // (recordPayment caps credits at the due). The
+                // customer-balance effect below is separate: the
+                // ledger formula (Customer::ledgerFigures) derives the
+                // balance from order totals/paid plus payments, not
+                // from the due_amount column, so reducing the column
+                // does not double-count the credit.
+                if ($orderItem && $netAmount != 0) {
+                    $orders->get($orderItem->order_id)?->decrement('due_amount', $netAmount);
+                }
 
                 // H6 — if tied to a customer, record the FULL net refund
                 // (after this line's discount), never silently $0. The old
@@ -267,9 +318,9 @@ class StockReturnController extends Controller
                 // CustomerPayment's $fillable does not list
                 // stock_return_id, so the link is set with forceFill()
                 // after creation rather than through mass assignment.
-                // $customer->credit_balance reflects each prior line's
-                // decrement already (Eloquent updates the in-memory
-                // attribute), so multi-line returns accumulate correctly.
+                // The locked customer instance reflects each prior
+                // line's decrement already, so multi-line returns
+                // accumulate correctly.
                 if ($customer && $netAmount > 0) {
                     $payment = $customer->payments()->create([
                         'type' => 'credit',
@@ -283,9 +334,15 @@ class StockReturnController extends Controller
             }
         });
 
-        return redirect()->route('stock-returns.index')->with('status', 'Customer stock return recorded — stock updated.');
-    }
+        // v3.1.0 (H8): batch failures never fail the return, but are
+        // surfaced here (no dedicated 'warning' flash slot exists in
+        // the layouts, so the warning rides on the status message).
+        $batchError = ProductBatch::takeLastBatchError();
+        $status = 'Customer stock return recorded — stock updated.'
+            . ($batchError ? " Warning: {$batchError}" : '');
 
+        return redirect()->route('stock-returns.index')->with('status', $status);
+    }
     public function supplierForm()
     {
         $products = Product::active()->orderBy('name')->get();
@@ -390,77 +447,107 @@ class StockReturnController extends Controller
             'items.*.reason' => ['nullable', 'string', 'max:255'],
         ]);
 
-        // Validate stock availability for every line — combining quantities
-        // per product first — before touching anything, so a problem with
-        // one line (or the same product appearing on two lines) never
-        // leaves earlier lines already applied while a later one fails.
-        $requiredByProduct = [];
-        foreach ($data['items'] as $line) {
-            $requiredByProduct[$line['product_id']] = ($requiredByProduct[$line['product_id']] ?? 0) + $line['quantity'];
-        }
-        foreach ($requiredByProduct as $productId => $qty) {
-            $product = Product::find($productId);
-            if ($qty > $product->stock) {
-                return back()->withInput()->withErrors([
-                    'quantity' => "{$product->name}: only {$product->stock} {$product->unit} in stock — can't return {$qty}.",
-                ]);
-            }
-        }
+        // v3.1.0 (H9/M10): like customerStore(), ALL quantity,
+        // belonging and stock-availability checks run INSIDE the
+        // transaction on lockForUpdate rows, quantities aggregated per
+        // product and per PO item first, and over-returns are REJECTED
+        // (never clamped). The supplier balance sync also moves INSIDE
+        // this transaction (M10), on the locked supplier row.
+        DB::transaction(function () use ($data) {
+            $supplier = Supplier::lockForUpdate()->find($data['supplier_id']);
 
-        // A line loaded from a real PO must never return more than what's
-        // actually still outstanding on that PO item — re-checked here
-        // against the database, not just the number the browser sent.
-        // H9 — the line must also belong to that PO item: same product
-        // and same supplier. Without this, goods from one supplier's PO
-        // could be returned against another supplier's PO while every
-        // "remaining" check still passed. Quantities are also combined
-        // per PO item first, so the same item on two lines cannot
-        // over-return in one submission.
-        $requiredByPoItem = [];
-        foreach ($data['items'] as $line) {
-            if (!empty($line['purchase_order_item_id'])) {
-                $requiredByPoItem[$line['purchase_order_item_id']] = ($requiredByPoItem[$line['purchase_order_item_id']] ?? 0) + $line['quantity'];
+            $linkedPoItemIds = collect($data['items'])
+                ->pluck('purchase_order_item_id')->filter()->unique()->sort()->values()->all();
+            $poItems = PurchaseOrderItem::whereIn('id', $linkedPoItemIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $poIds = $poItems->pluck('purchase_order_id')->unique()->sort()->values()->all();
+            $pos = PurchaseOrder::whereIn('id', $poIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $productIds = collect($data['items'])->pluck('product_id')->unique()->sort()->values()->all();
+            $products = Product::whereIn('id', $productIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+
+            // Stock availability per product, combined across lines.
+            $requiredByProduct = [];
+            foreach ($data['items'] as $line) {
+                $requiredByProduct[$line['product_id']] = ($requiredByProduct[$line['product_id']] ?? 0) + (float) $line['quantity'];
             }
-        }
-        foreach ($data['items'] as $line) {
-            if (!empty($line['purchase_order_item_id'])) {
-                $poItem = PurchaseOrderItem::find($line['purchase_order_item_id']);
-                if (!$poItem || !$poItem->purchaseOrder) {
-                    return back()->withInput()->withErrors([
-                        'quantity' => 'A return line names a purchase order item that no longer exists.',
-                    ]);
+            foreach ($requiredByProduct as $productId => $qty) {
+                $product = $products->get($productId);
+                if (!$product) {
+                    throw ValidationException::withMessages(['quantity' => 'A return line names a product that no longer exists.']);
+                }
+                if ($qty > (float) $product->stock) {
+                    throw ValidationException::withMessages(['quantity' => "{$product->name}: only {$product->stock} {$product->unit} in stock — can't return {$qty}."]);
+                }
+            }
+
+            // Belonging + remaining per PO item, combined across lines.
+            $requiredByPoItem = [];
+            foreach ($data['items'] as $line) {
+                if (!empty($line['purchase_order_item_id'])) {
+                    $requiredByPoItem[$line['purchase_order_item_id']] = ($requiredByPoItem[$line['purchase_order_item_id']] ?? 0) + (float) $line['quantity'];
+                }
+            }
+            foreach ($data['items'] as $line) {
+                if (empty($line['purchase_order_item_id'])) {
+                    continue;
+                }
+                $poItem = $poItems->get($line['purchase_order_item_id']);
+                if (!$poItem) {
+                    throw ValidationException::withMessages(['quantity' => 'A return line names a purchase order item that no longer exists.']);
+                }
+                $po = $pos->get($poItem->purchase_order_id);
+                if (!$po) {
+                    throw ValidationException::withMessages(['quantity' => 'A return line names a purchase order that is no longer available.']);
                 }
                 if ((int) $line['product_id'] !== (int) $poItem->product_id) {
-                    return back()->withInput()->withErrors([
-                        'quantity' => "Product mismatch: this return line's product does not match the purchase order item it was loaded from.",
-                    ]);
+                    throw ValidationException::withMessages(['quantity' => "Product mismatch: this return line's product does not match the purchase order item it was loaded from."]);
                 }
                 // Loose comparison on purpose: the form posts strings,
                 // the PO stores ints.
-                if ($poItem->purchaseOrder->supplier_id != $data['supplier_id']) {
-                    return back()->withInput()->withErrors([
-                        'quantity' => 'Supplier mismatch: this return line belongs to a different supplier than the one selected.',
-                    ]);
+                if ($po->supplier_id != $data['supplier_id']) {
+                    throw ValidationException::withMessages(['quantity' => 'Supplier mismatch: this return line belongs to a different supplier than the one selected.']);
                 }
-                $remaining = $poItem->remainingReturnableQuantity();
-                if ($requiredByPoItem[$line['purchase_order_item_id']] > $remaining) {
-                    return back()->withInput()->withErrors([
-                        'quantity' => "{$poItem?->product?->name}: only {$remaining} {$poItem?->product?->unit} left returnable from that PO — the rest was already returned.",
-                    ]);
+                if ($po->status !== 'received') {
+                    throw ValidationException::withMessages(['quantity' => "PO #{$po->id} is not received, so nothing from it can be returned."]);
                 }
             }
-        }
+            foreach ($requiredByPoItem as $poItemId => $requested) {
+                $poItem = $poItems->get($poItemId);
+                $remaining = $poItem->remainingReturnableQuantity();
+                if ($requested > $remaining) {
+                    $product = $products->get($poItem->product_id);
+                    throw ValidationException::withMessages(['quantity' => "{$product?->name}: only {$remaining} {$product?->unit} left returnable from that PO — the rest was already returned."]);
+                }
+            }
 
-        DB::transaction(function () use ($data) {
             foreach ($data['items'] as $line) {
-                $product = Product::findOrFail($line['product_id']);
+                $product = $products->get($line['product_id']) ?? Product::findOrFail($line['product_id']);
                 $product->decrement('stock', $line['quantity']);
 
-                $discountPercent = $line['discount_percent'] ?? 0;
-                $gross = $line['quantity'] * $line['unit_price'];
-                $discountAmount = round($gross * ($discountPercent / 100), 2);
+                // v3.1.0 (H7): a supplier return takes stock OUT, so
+                // batches are consumed FIFO to match. (The old code
+                // deliberately skipped batches here; that left total
+                // batched remaining above stock by every returned
+                // unit. Batch attribution for a correction-style
+                // delta is FIFO, not the original PO batch — see
+                // ProductBatch::mirrorStockDelta().)
+                ProductBatch::mirrorStockDelta((int) $product->id, -(float) $line['quantity'], ['record' => 'Supplier return']);
 
-                $poItem = !empty($line['purchase_order_item_id']) ? PurchaseOrderItem::find($line['purchase_order_item_id']) : null;
+                // v3.1.0 (H10): linked lines use the SOURCE PO line's
+                // cost/discount; submitted values are ignored for
+                // them. Typed values only for unlinked manual lines,
+                // flagged in the return note (no flag column exists).
+                $poItem = !empty($line['purchase_order_item_id']) ? $poItems->get($line['purchase_order_item_id']) : null;
+                if ($poItem) {
+                    $unitPrice = (float) $poItem->cost_price;
+                    $discountPercent = (float) $poItem->discount_percent;
+                    $reason = $line['reason'] ?? null;
+                } else {
+                    $unitPrice = (float) $line['unit_price'];
+                    $discountPercent = (float) ($line['discount_percent'] ?? 0);
+                    $reason = trim(($line['reason'] ? $line['reason'] . ' ' : '') . '(manual price)');
+                }
+                $gross = $line['quantity'] * $unitPrice;
+                $discountAmount = round($gross * ($discountPercent / 100), 2);
 
                 $stockReturn = StockReturn::create([
                     'type' => 'to_supplier',
@@ -469,10 +556,10 @@ class StockReturnController extends Controller
                     'purchase_order_item_id' => $line['purchase_order_item_id'] ?? null,
                     'purchase_order_id' => $poItem?->purchase_order_id,
                     'quantity' => $line['quantity'],
-                    'unit_price' => $line['unit_price'],
+                    'unit_price' => $unitPrice,
                     'discount_percent' => $discountPercent,
                     'discount_amount' => $discountAmount,
-                    'reason' => $line['reason'] ?? null,
+                    'reason' => $reason,
                     'user_id' => auth()->id(),
                 ]);
 
@@ -499,26 +586,30 @@ class StockReturnController extends Controller
                 // simply that net figure (see PurchaseOrderItem).
                 if ($poItem) {
                     $poItem->decrement('received_quantity', $line['quantity']);
-                    if ((float) $poItem->fresh()->received_quantity < 0) {
-                        throw new \RuntimeException(
-                            "Supplier return for \"{$product->name}\" exceeds what PO #{$poItem->purchase_order_id} still holds."
-                        );
+                    if ((float) $poItem->received_quantity < 0) {
+                        throw ValidationException::withMessages(['quantity' => "Supplier return for \"{$product->name}\" exceeds what PO #{$poItem->purchase_order_id} still holds."]);
                     }
-                    $this->recalculatePoTotals($poItem->purchaseOrder);
+                    $this->recalculatePoTotals($pos->get($poItem->purchase_order_id));
                 }
             }
+
+            // v2.2 supplier ledger hook, now INSIDE the transaction
+            // (M10): the return already reduced the PO line's
+            // received_quantity and recomputed the PO total (H8), so
+            // what we owe this supplier has fallen by the returned
+            // value — re-sync it. Returns are NOT subtracted again in
+            // syncBalance() itself, or every return would count twice.
+            $supplier?->syncBalance();
         });
 
-        // v2.2 supplier ledger hook: the return already reduced the PO
-        // line's received_quantity and recomputed the PO total (H8), so
-        // what we owe this supplier has fallen by the returned value —
-        // re-sync it. Returns are NOT subtracted again in syncBalance()
-        // itself, or every return would count twice.
-        Supplier::find($data['supplier_id'])?->syncBalance();
+        // v3.1.0 (H8): see customerStore() — batch warning rides on
+        // the status message (no 'warning' flash slot in the layouts).
+        $batchError = ProductBatch::takeLastBatchError();
+        $status = 'Supplier stock return recorded — stock and purchase report updated.'
+            . ($batchError ? " Warning: {$batchError}" : '');
 
-        return redirect()->route('stock-returns.index')->with('status', 'Supplier stock return recorded — stock and purchase report updated.');
+        return redirect()->route('stock-returns.index')->with('status', $status);
     }
-
     /** Recomputes a PO's subtotal/discount/total from its lines' current
      *  (net, post-return) received quantities — the same formula
      *  PurchaseOrderController::recalculateTotals() uses, duplicated here

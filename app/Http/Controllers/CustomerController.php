@@ -70,7 +70,7 @@ class CustomerController extends Controller
             'id_card_number' => ['nullable', 'string', 'regex:/^\d{5}-\d{7}-\d{1}$/'],
             'current_address' => ['nullable', 'string'],
             'permanent_address' => ['nullable', 'string'],
-            'image' => ['nullable', 'image', 'max:2048'],
+            'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'discount_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
         ];
     }
@@ -91,8 +91,13 @@ class CustomerController extends Controller
             @unlink($dir . '/' . $customer->image);
         }
 
-        $filename = Str::random(20) . '.' . $request->file('image')->getClientOriginalExtension();
-        $request->file('image')->move($dir, $filename);
+        // v3.1.0 (L2): never trust the client-supplied extension
+        // (a script renamed .php would keep a dangerous suffix). The
+        // extension is detected from the file's actual MIME type, and
+        // the validation below additionally restricts it to image types.
+        $file = $request->file('image');
+        $filename = Str::random(20) . '.' . $file->extension();
+        $file->move($dir, $filename);
 
         return $filename;
     }
@@ -320,8 +325,17 @@ class CustomerController extends Controller
         // Ledger row + cached balance update must succeed or fail together
         // (same pattern updatePayment()/destroyPayment() already use) —
         // otherwise the history and the balance disagree permanently.
+        // v3.1.0 (M8): the customer row is locked inside the
+        // transaction so concurrent payments serialize on it. NOTE —
+        // no amount <= due re-check is added here on purpose: a credit
+        // larger than what's owed is DELIBERATELY allowed (it takes
+        // the balance negative = an advance the business owes the
+        // customer, see the docblock above), so a cap would break a
+        // legitimate flow. The lock serializes writers; it does not by
+        // itself defeat a double-clicked uncapped credit (see report).
         DB::transaction(function () use ($customer, $data) {
-            $customer->payments()->create([
+            $locked = Customer::lockForUpdate()->findOrFail($customer->id);
+            $locked->payments()->create([
                 'type' => $data['type'],
                 'amount' => $data['amount'],
                 'note' => $data['note'] ?? null,
@@ -329,9 +343,9 @@ class CustomerController extends Controller
             ]);
 
             if ($data['type'] === 'credit') {
-                $customer->decrement('credit_balance', $data['amount']);
+                $locked->decrement('credit_balance', $data['amount']);
             } else {
-                $customer->increment('credit_balance', $data['amount']);
+                $locked->increment('credit_balance', $data['amount']);
             }
         });
 
@@ -358,15 +372,25 @@ class CustomerController extends Controller
             'note' => ['nullable', 'string', 'max:255'],
         ]);
 
-        DB::transaction(function () use ($payment, $data) {
+        // v3.1.0 (M8): lock the customer row first so the reverse +
+        // re-apply sequence serializes with concurrent payments. No
+        // due cap is added (same deliberate advance allowance as
+        // recordPayment() above). reverseEffect() itself issues atomic
+        // increment/decrement SQL, so it needs no locked instance.
+        DB::transaction(function () use ($customer, $payment, $data) {
+            $locked = Customer::lockForUpdate()->findOrFail($customer->id);
             $payment->reverseEffect();
             $payment->update($data);
             if ($data['type'] === 'credit') {
-                $payment->customer->decrement('credit_balance', $data['amount']);
+                $locked->decrement('credit_balance', $data['amount']);
             } else {
-                $payment->customer->increment('credit_balance', $data['amount']);
+                $locked->increment('credit_balance', $data['amount']);
             }
         });
+
+        // v3.1.0 (M9): safety net — recompute the stored balance from the
+        // ledger so an incremental drift can never survive an edit.
+        $customer->fresh()->syncBalance();
 
         return back()->with('status', 'Ledger entry updated and balance adjusted.');
     }
@@ -379,10 +403,17 @@ class CustomerController extends Controller
     {
         abort_unless((int) $payment->customer_id === (int) $customer->id, 404);
 
-        DB::transaction(function () use ($payment) {
+        // v3.1.0 (M8): lock the customer row first (see updatePayment()).
+        DB::transaction(function () use ($customer, $payment) {
+            Customer::lockForUpdate()->findOrFail($customer->id);
             $payment->reverseEffect();
             $payment->delete();
         });
+
+        // v3.1.0 (M9): the supplier equivalent re-syncs after delete, but
+        // this one did not — the stored balance kept the deleted entry's
+        // effect until someone opened the ledger page. Recompute now.
+        $customer->fresh()->syncBalance();
 
         return back()->with('status', 'Ledger entry moved to Trash and balance adjusted.');
     }

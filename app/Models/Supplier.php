@@ -4,15 +4,19 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
 
 class Supplier extends Model
 {
     use SoftDeletes;
 
+    // v3.1.0 (L4): balance removed — it is ledger-derived
+    // (syncBalance()'s forceFill), never request mass assignment. No
+    // controller create/update ever passed balance (rules() has no
+    // such field), so no call-site change was needed for this model.
     protected $fillable = [
         'name', 'phone', 'email', 'address', 'id_card_number',
         'current_address', 'permanent_address', 'image', 'is_active',
-        'balance',
     ];
 
     public function purchaseOrders() { return $this->hasMany(PurchaseOrder::class); }
@@ -62,9 +66,25 @@ class Supplier extends Model
      *  pattern as Customer::syncBalance(). Callers (supplier page,
      *  payment recording, PO receive/correction/delete, supplier
      *  returns) call this after the event that moves the balance, so
-     *  the stored column never silently disagrees with the ledger. */
+     *  the stored column never silently disagrees with the ledger.
+     *
+     *  v3.1.0 (M10): when called inside a transaction (every PO /
+     *  return / payment event path after this fix), the supplier row
+     *  is locked first and this instance refreshed from the locked
+     *  row, so two concurrent syncs cannot interleave their
+     *  read-compute-write on the balance column. Outside a
+     *  transaction (e.g. the detail page) locking would release
+     *  immediately, so it is skipped there. withTrashed is used so a
+     *  sync for a supplier that itself sits in Trash (Trash restore
+     *  path) still locks and refreshes instead of failing. */
     public function syncBalance(): array
     {
+        if (DB::transactionLevel() > 0) {
+            $locked = static::withTrashed()->lockForUpdate()->find($this->id);
+            if ($locked) {
+                $this->setRawAttributes($locked->getAttributes(), true);
+            }
+        }
         $f = $this->duesFigures();
         $computed = round($f['received_total'] - $f['payments_total'] - $f['credits'] + $f['debits'], 2);
         if ($this->balance === null || abs((float) $this->balance - $computed) > 0.004) {

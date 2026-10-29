@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\ProductBatch;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\Rule;
 
 /**
  * v3.0.3 — Dedicated Batches / Expiry page.
@@ -81,7 +82,15 @@ class ProductBatchController extends Controller
     public function update(Request $request, ProductBatch $batch)
     {
         $data = $request->validate([
-            'batch_no' => ['required', 'string', 'max:255'],
+            'batch_no' => [
+                'required', 'string', 'max:255',
+                // v3.1.0 (L6): batch_no must be unique PER PRODUCT, excluding
+                // this row itself (otherwise saving an unchanged batch_no
+                // would falsely fail). Different products may reuse a batch_no.
+                Rule::unique('product_batches', 'batch_no')
+                    ->where('product_id', $batch->product_id)
+                    ->ignore($batch->id),
+            ],
             'expiry_date' => ['nullable', 'date'],
         ]);
 
@@ -89,13 +98,21 @@ class ProductBatchController extends Controller
         if ($expiry === '') {
             $expiry = null;
         }
+        // v3.1.0 (M17) — WARN, do not block: a past expiry date is accepted
+        // but flagged on the redirect, so the correction is visible.
+        $pastExpiryWarning = ($expiry !== null && $expiry < now()->toDateString());
 
         $batch->update([
             'batch_no' => trim($data['batch_no']),
             'expiry_date' => $expiry,
         ]);
 
+        $status = __('Batch updated');
+        if ($pastExpiryWarning) {
+            $status .= ' ' . __('Warning: this expiry date is already in the past — this batch is expired. Sales are not blocked on expired stock yet; check the Batches / Expiry page before selling it.');
+        }
+
         return redirect()->route('batches.index')
-            ->with('status', __('Batch updated'));
+            ->with('status', $status);
     }
 }

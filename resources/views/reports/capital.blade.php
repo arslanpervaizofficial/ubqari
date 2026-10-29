@@ -49,9 +49,14 @@
         <div class="text-xs text-gray-400 mt-1 capital-hint">{{ __('Wholesale credit') }} {{ number_format($customerReceivables, 2) }} + {{ __('Walk-in dues') }} {{ number_format($walkInDue, 2) }} {{ __('— owed BY customers (credit balance on') }} <a href="{{ route('customers.index') }}" class="underline">{{ __('Customers') }}</a>{{ __(', plus completed walk-in orders with no customer, due_amount still outstanding) — now added below in Net Capital') }}</div>
     </div>
     <div class="bg-white p-5 rounded-xl shadow-sm">
+        <div class="text-gray-500 text-sm">{{ __('Advances to Suppliers') }}</div>
+        <div class="text-2xl font-bold {{ ($supplierAdvances ?? 0) > 0 ? 'text-blue-700' : '' }}">{{ number_format($supplierAdvances ?? 0, 2) }}</div>
+        <div class="text-xs text-gray-400 mt-1 capital-hint">{{ __('Negative supplier balances — money paid to suppliers in advance, owed back to the business (from') }} <a href="{{ route('suppliers.index') }}" class="underline">{{ __('Suppliers') }}</a>{{ __(') — now added below in Net Capital') }}</div>
+    </div>
+    <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">{{ __('Net Capital') }}</div>
         <div class="text-2xl font-bold {{ $netCapital < 0 ? 'text-red-600' : '' }}">{{ number_format($netCapital, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1 capital-hint">{{ __('Total Investment − Expenses − Liabilities') }}</div>
+        <div class="text-xs text-gray-400 mt-1 capital-hint">{{ __('Total Investment − Expenses − Liabilities + Advances to Suppliers') }}</div>
     </div>
 </div>
 

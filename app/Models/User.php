@@ -10,9 +10,13 @@ class User extends Authenticatable
 {
     use Notifiable, SoftDeletes;
 
+    // v3.1.0 (L4): password, role and is_active removed — they must
+    // never be mass-assignable from request data. Call sites now use
+    // forceFill() (UserController store/update/toggleActive,
+    // ProfileController password change, DatabaseSeeder).
     protected $fillable = [
         'name', 'username', 'email', 'phone', 'city', 'address',
-        'id_card_number', 'image', 'password', 'role', 'is_active',
+        'id_card_number', 'image',
     ];
     protected $hidden = ['password', 'remember_token'];
 

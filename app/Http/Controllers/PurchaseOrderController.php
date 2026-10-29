@@ -39,15 +39,20 @@ class PurchaseOrderController extends Controller
             DB::transaction(function () use ($purchaseOrder) {
                 $purchaseOrder->reverseReceivedEffects();
                 $purchaseOrder->delete();
+                // v2.2 supplier ledger hook, v3.1.0 (M10): supplier
+                // sync INSIDE the transaction (was after it). A
+                // trashed PO no longer counts in received totals
+                // (purchaseOrders() excludes soft-deleted rows), so
+                // what we owe this supplier has changed — and the
+                // delete is visible to the sync inside the same
+                // transaction.
+                if ($purchaseOrder->supplier_id) {
+                    Supplier::lockForUpdate()->find($purchaseOrder->supplier_id)?->syncBalance();
+                }
             });
         } catch (\RuntimeException $e) {
             return back()->withErrors(['purchase_order' => $e->getMessage()]);
         }
-
-        // v2.2 supplier ledger hook: a trashed PO no longer counts in
-        // received totals (purchaseOrders() excludes soft-deleted rows),
-        // so what we owe this supplier has changed.
-        $purchaseOrder->supplier?->syncBalance();
 
         return back()->with('status', "PO #{$purchaseOrder->id} moved to Trash — stock adjusted.");
     }
@@ -88,9 +93,13 @@ class PurchaseOrderController extends Controller
                 DB::transaction(function () use ($purchaseOrder) {
                     $purchaseOrder->reverseReceivedEffects();
                     $purchaseOrder->delete();
+                    // v2.2 supplier ledger hook, v3.1.0 (M10):
+                    // supplier sync INSIDE the transaction (same
+                    // reason as destroy()).
+                    if ($purchaseOrder->supplier_id) {
+                        Supplier::lockForUpdate()->find($purchaseOrder->supplier_id)?->syncBalance();
+                    }
                 });
-                // v2.2 supplier ledger hook (same reason as destroy()).
-                $purchaseOrder->supplier?->syncBalance();
                 $deleted++;
             } catch (\RuntimeException $e) {
                 $skipped[] = "PO #{$purchaseOrder->id}";
@@ -360,7 +369,13 @@ class PurchaseOrderController extends Controller
 
                 $po->items()->create($line);
 
-                $netCost = $line['cost_price'] * (1 - $line['discount_percent'] / 100);
+                // v3.1.0 (M13): use the SAME rounding as
+                // recalculateTotals() — the per-unit net cost ROUNDED
+                // to 2dp via the PurchaseOrderItem accessor — so the
+                // store-time total cannot shift by cents at receive
+                // time, when totals are recomputed from received
+                // quantities × rounded net cost.
+                $netCost = round($line['cost_price'] * (1 - $line['discount_percent'] / 100), 2);
                 $subtotal += $line['quantity'] * $netCost;
             }
 
@@ -469,6 +484,37 @@ class PurchaseOrderController extends Controller
             }
         }
 
+        // v3.1.0 (M17) — WARN, do not block: collect lines whose submitted
+        // expiry date is already in the past. The receive still goes through;
+        // the warning is appended to the redirect status below.
+        $pastExpiryWarnings = [];
+        foreach ($poItems as $item) {
+            $expiry = $data['items'][$item->id]['expiry_date'] ?? null;
+            if ($expiry !== null && $expiry !== '' && $expiry < now()->toDateString()) {
+                $pastExpiryWarnings[] = $item->product?->name ?? ('item #' . $item->id);
+            }
+        }
+
+        // v3.1.0 (L6) — WARN, do not block: flag user-entered batch numbers
+        // that already exist for the same product. The receive still goes
+        // through; duplicates are a bookkeeping confusion risk, not a
+        // stock-corruption risk, so this is a warning, not an error.
+        $duplicateBatchWarnings = [];
+        if (Schema::hasTable('product_batches')) {
+            foreach ($poItems as $item) {
+                $submittedBatchNo = trim((string) ($data['items'][$item->id]['batch_no'] ?? ''));
+                if ($submittedBatchNo === '') {
+                    continue; // auto-generated PO-{id}-L{n} below; not user input
+                }
+                $exists = \App\Models\ProductBatch::where('product_id', $item->product_id)
+                    ->where('batch_no', $submittedBatchNo)
+                    ->exists();
+                if ($exists) {
+                    $duplicateBatchWarnings[] = ($item->product?->name ?? ('item #' . $item->id)) . ' (' . $submittedBatchNo . ')';
+                }
+            }
+        }
+
         try {
             DB::transaction(function () use ($purchaseOrder, $data) {
                 // H12c — lock first, then check status inside the lock.
@@ -563,7 +609,13 @@ class PurchaseOrderController extends Controller
                         }
                     }
                 }
-                $locked->update(['status' => 'received']);
+                // v3.1.0 (H13): record WHEN the PO was received
+                // alongside the status. (The backfill of already-
+                // received POs is a separate migration; this only
+                // stamps new receives. received_at is in
+                // PurchaseOrder::$fillable so this is not silently
+                // dropped by mass-assignment guarding.)
+                $locked->update(['status' => 'received', 'received_at' => now()]);
 
                 // Realign subtotal/total with what was ACTUALLY received
                 // right away, rather than leaving the ordered-quantity
@@ -582,7 +634,15 @@ class PurchaseOrderController extends Controller
             return back()->withErrors(['error' => $e->getMessage()]);
         }
 
-        return redirect()->route('purchase-orders.index')->with('status', 'PO marked received — stock updated with actual received quantities.');
+        $status = 'PO marked received — stock updated with actual received quantities.';
+        if ($pastExpiryWarnings !== []) {
+            $status .= ' Warning: expiry date already passed for: ' . implode(', ', $pastExpiryWarnings) . '. This stock is expired on arrival — check the Batches / Expiry page before selling it.';
+        }
+        if ($duplicateBatchWarnings !== []) {
+            $status .= ' Warning: batch number already exists for this product: ' . implode(', ', $duplicateBatchWarnings) . '. The new batch was still created — check the Batches / Expiry page if the numbers should differ.';
+        }
+
+        return redirect()->route('purchase-orders.index')->with('status', $status);
     }
 
     /** Read-only-looking but click-to-edit view of a received PO. Only
@@ -655,47 +715,80 @@ class PurchaseOrderController extends Controller
             }
         }
 
-        DB::transaction(function () use ($item, $data) {
-            if (array_key_exists('received_quantity', $data) && $data['received_quantity'] !== null) {
-                $oldQty = $item->received_quantity;
-                $newQty = $data['received_quantity'];
-                $delta = $newQty - $oldQty;
+        // v3.1.0 (L11f/M10/H7): the pre-check above reads stale
+        // values, so the guard, the stock move, the totals recompute
+        // AND the supplier sync all run again inside ONE transaction
+        // on locked rows (PO, then item, then product — same order
+        // every time). The in-transaction guard re-reads the locked
+        // product's stock and the locked item's quantity, so a
+        // concurrent sale between the pre-check and this transaction
+        // cannot slip a negative stock through. A guard failure inside
+        // is returned as JSON 422, same as the pre-check.
+        try {
+            DB::transaction(function () use ($purchaseOrder, $item, $data) {
+                $lockedPo = PurchaseOrder::lockForUpdate()->findOrFail($purchaseOrder->id);
+                if ($lockedPo->status !== 'received') {
+                    throw new \RuntimeException('This PO is no longer received, so its lines cannot be corrected.');
+                }
+                $lockedItem = PurchaseOrderItem::lockForUpdate()->findOrFail($item->id);
+                $lockedProduct = Product::lockForUpdate()->findOrFail($lockedItem->product_id);
 
-                if ($delta !== 0.0) {
-                    $item->product()->increment('stock', $delta);
-                    StockMovement::create([
-                        'product_id' => $item->product_id,
-                        'type' => 'purchase',
-                        'quantity' => $delta,
-                        'reason' => "PO #{$item->purchase_order_id} received quantity corrected ({$oldQty} → {$newQty})",
-                        'user_id' => auth()->id(),
-                        'purchase_order_id' => $item->purchase_order_id,
-                    ]);
+                if (array_key_exists('received_quantity', $data) && $data['received_quantity'] !== null) {
+                    $oldQty = $lockedItem->received_quantity;
+                    $newQty = $data['received_quantity'];
+                    $delta = $newQty - $oldQty;
+
+                    if ($delta < 0 && (float) $lockedProduct->stock + $delta < 0) {
+                        throw new \RuntimeException(
+                            "Received quantity kam karne se \"{$lockedProduct->name}\" ki stock negative ho jaye gi (maujud stock {$lockedProduct->stock}, kami {$delta})."
+                        );
+                    }
+
+                    if ($delta !== 0.0) {
+                        $lockedProduct->increment('stock', $delta);
+                        ProductBatch::mirrorStockDelta((int) $lockedItem->product_id, (float) $delta, ['record' => "PO #{$lockedPo->id}"]);
+                        StockMovement::create([
+                            'product_id' => $lockedItem->product_id,
+                            'type' => 'purchase',
+                            'quantity' => $delta,
+                            'reason' => "PO #{$lockedItem->purchase_order_id} received quantity corrected ({$oldQty} → {$newQty})",
+                            'user_id' => auth()->id(),
+                            'purchase_order_id' => $lockedItem->purchase_order_id,
+                        ]);
+                    }
+
+                    $lockedItem->update(['received_quantity' => $newQty]);
                 }
 
-                $item->update(['received_quantity' => $newQty]);
-            }
+                if (array_key_exists('discount_percent', $data) && $data['discount_percent'] !== null) {
+                    $lockedItem->update(['discount_percent' => $data['discount_percent']]);
+                }
 
-            if (array_key_exists('discount_percent', $data) && $data['discount_percent'] !== null) {
-                $item->update(['discount_percent' => $data['discount_percent']]);
-            }
+                // Keep the product's cost reference (gross Purchase Price +
+                // Purchase Discount %) in sync with this line's current
+                // numbers, same as receive() does originally.
+                $lockedProduct->update([
+                    'purchase_price' => $lockedItem->cost_price,
+                    'purchase_discount_percent' => $lockedItem->discount_percent,
+                ]);
 
-            // Keep the product's cost reference (gross Purchase Price +
-            // Purchase Discount %) in sync with this line's current
-            // numbers, same as receive() does originally.
-            $item->product->update([
-                'purchase_price' => $item->fresh()->cost_price,
-                'purchase_discount_percent' => $item->fresh()->discount_percent,
-            ]);
-        });
+                // Totals + v2.2 supplier ledger hook, both INSIDE
+                // the transaction (M10), on the locked PO / locked
+                // supplier row — the old code did both after the
+                // transaction, where a concurrent event could
+                // interleave and leave a stale total or balance behind.
+                $this->recalculateTotals($lockedPo);
+                if ($lockedPo->supplier_id) {
+                    Supplier::lockForUpdate()->find($lockedPo->supplier_id)?->syncBalance();
+                }
+            });
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
 
         $item->refresh();
         $purchaseOrder->refresh();
-        $this->recalculateTotals($purchaseOrder);
-
-        // v2.2 supplier ledger hook: the PO total changed, so what we
-        // owe its supplier has changed too.
-        $purchaseOrder->supplier?->syncBalance();
+        $batchWarning = ProductBatch::takeLastBatchError();
 
         return response()->json([
             'received_quantity' => $item->received_quantity,
@@ -713,6 +806,8 @@ class PurchaseOrderController extends Controller
                 'discount_amount' => $purchaseOrder->discount_amount,
                 'total' => $purchaseOrder->total,
             ],
+            // v3.1.0 (H8): null when batches mirrored cleanly.
+            'batch_warning' => $batchWarning,
         ]);
     }
 
@@ -727,13 +822,32 @@ class PurchaseOrderController extends Controller
             'discount_percent' => ['required', 'numeric', 'min:0', 'max:100'],
         ]);
 
-        $purchaseOrder->update(['discount_percent' => $data['discount_percent']]);
-        $this->recalculateTotals($purchaseOrder);
+        // v3.1.0 (M10): this method previously had NO transaction at
+        // all — the discount update, the totals recompute and the
+        // supplier sync could interleave with concurrent events. Now
+        // one transaction covers all three, on the locked PO row
+        // (status re-checked inside) and the locked supplier row.
+        try {
+            DB::transaction(function () use ($purchaseOrder, $data) {
+                $locked = PurchaseOrder::lockForUpdate()->findOrFail($purchaseOrder->id);
+                if ($locked->status !== 'received') {
+                    throw new \RuntimeException('This PO is no longer received, so its discount cannot be changed.');
+                }
+                $locked->update(['discount_percent' => $data['discount_percent']]);
+                $this->recalculateTotals($locked);
 
-        // v2.2 supplier ledger hook (extra, same pattern as updateItem):
-        // the overall discount changes the PO total, so the supplier
-        // balance moves with it.
-        $purchaseOrder->supplier?->syncBalance();
+                // v2.2 supplier ledger hook (extra, same pattern as updateItem):
+                // the overall discount changes the PO total, so the supplier
+                // balance moves with it.
+                if ($locked->supplier_id) {
+                    Supplier::lockForUpdate()->find($locked->supplier_id)?->syncBalance();
+                }
+            });
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        $purchaseOrder->refresh();
 
         return response()->json([
             'discount_percent' => $purchaseOrder->discount_percent,
@@ -787,7 +901,13 @@ class PurchaseOrderController extends Controller
                 }
 
                 // Received PO: reverse exactly this line's stock effect.
-                $receivedQty = (float) $item->received_quantity;
+                // v3.1.0: the quantity is re-read from the LOCKED item
+                // row, not the pre-transaction instance — a supplier
+                // return landing between the block pre-check and this
+                // transaction must not leave a stale (too large)
+                // quantity being deducted.
+                $lockedItem = PurchaseOrderItem::lockForUpdate()->findOrFail($item->id);
+                $receivedQty = (float) $lockedItem->received_quantity;
                 $product = Product::lockForUpdate()->findOrFail($item->product_id);
                 if ($receivedQty > 0) {
                     if ($product->stock < $receivedQty) {
@@ -797,6 +917,9 @@ class PurchaseOrderController extends Controller
                         );
                     }
                     $product->decrement('stock', $receivedQty);
+                    // v3.1.0 (H7): the line's stock decrease is
+                    // mirrored in batches, in this same transaction.
+                    ProductBatch::mirrorStockDelta((int) $item->product_id, -$receivedQty, ['record' => "PO #{$purchaseOrder->id}"]);
                     StockMovement::create([
                         'product_id' => $item->product_id,
                         'type' => 'adjustment',
@@ -808,16 +931,19 @@ class PurchaseOrderController extends Controller
                 }
                 $item->delete();
                 $this->recalculateTotals($purchaseOrder->fresh());
+
+                // v2.2 supplier ledger hook, v3.1.0 (M10): supplier
+                // sync INSIDE the transaction (was after it). The
+                // pending branch returns before this point, which is
+                // fine — pending POs never counted as owed, so a sync
+                // there would be a no-op anyway.
+                if ($purchaseOrder->supplier_id) {
+                    Supplier::lockForUpdate()->find($purchaseOrder->supplier_id)?->syncBalance();
+                }
             });
         } catch (\RuntimeException $e) {
             return back()->withErrors(['purchase_order_item' => $e->getMessage()]);
         }
-
-        // v2.2 supplier ledger hook (extra, same pattern as updateItem):
-        // deleting a line recomputes the PO total, so the supplier
-        // balance moves with it. Pending POs never counted as owed, so
-        // the sync is a harmless no-op for them.
-        $purchaseOrder->fresh()->supplier?->syncBalance();
 
         $msg = $purchaseOrder->status === 'received'
             ? "Product line delete ho gai — stock {$item->received_quantity} se kam kar diya gaya."

@@ -11,6 +11,7 @@ use App\Models\ProductBatch;
 use App\Models\StockMovement;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -105,12 +106,12 @@ class POSController extends Controller
             if ($currentId && $currentId != $order->id) {
                 $current = Order::where('id', $currentId)->when(!$this->isPrivileged(), fn ($q) => $q->where('user_id', auth()->id()))->where('status', 'in_progress')->first();
                 if ($current) {
-                    $current->items()->count() > 0 ? $current->update(['status' => 'hold']) : $current->forceDelete();
+                    $current->items()->count() > 0 ? $current->forceFill(['status' => 'hold'])->save() : $current->forceDelete();
                 }
             }
 
             $order->reverseCompletedEffects();
-            $order->update(['status' => 'in_progress']);
+            $order->forceFill(['status' => 'in_progress'])->save();
         });
 
         $request->session()->put('current_order_id', $order->id);
@@ -149,18 +150,20 @@ class POSController extends Controller
             ->get()
             ->each(function ($stray) {
                 if ($stray->items()->count() > 0) {
-                    $stray->update(['status' => 'hold']);
+                    $stray->forceFill(['status' => 'hold'])->save();
                 } else {
                     // Empty cart: permanently discard, never send to Trash (v1.4).
                     $stray->forceDelete();
                 }
             });
 
-        $order = Order::create([
+        // v3.1.0 (L4): status is no longer in Order::$fillable.
+        $order = new Order;
+        $order->forceFill([
             'order_number' => 'ORD-' . now()->format('Ymd') . '-' . strtoupper(Str::random(5)),
             'user_id' => auth()->id(),
             'status' => 'in_progress',
-        ]);
+        ])->save();
 
         $request->session()->put('current_order_id', $order->id);
 
@@ -174,7 +177,7 @@ class POSController extends Controller
             $current = Order::where('id', $currentId)->when(!$this->isPrivileged(), fn ($q) => $q->where('user_id', auth()->id()))->where('status', 'in_progress')->first();
             if ($current) {
                 if ($current->items()->count() > 0) {
-                    $current->update(['status' => 'hold']);
+                    $current->forceFill(['status' => 'hold'])->save();
                 } else {
                     // Empty cart: permanently discard, never send to Trash (v1.4).
                     $current->forceDelete();
@@ -224,7 +227,7 @@ class POSController extends Controller
             $current = Order::where('id', $currentId)->when(!$this->isPrivileged(), fn ($q) => $q->where('user_id', auth()->id()))->where('status', 'in_progress')->first();
             if ($current) {
                 if ($current->items()->count() > 0) {
-                    $current->update(['status' => 'hold']);
+                    $current->forceFill(['status' => 'hold'])->save();
                 } else {
                     // Empty cart: permanently discard, never send to Trash (v1.4).
                     $current->forceDelete();
@@ -232,7 +235,7 @@ class POSController extends Controller
             }
         }
 
-        $order->update(['status' => 'in_progress']);
+        $order->forceFill(['status' => 'in_progress'])->save();
         $request->session()->put('current_order_id', $order->id);
 
         return redirect()->route('pos.index')->with('status', "Resumed {$order->order_number}.");
@@ -488,10 +491,21 @@ class POSController extends Controller
         $items = $order->items;
         $grossSubtotal = $items->sum(fn ($i) => $i->quantity * $i->unit_price);
         $lineDiscountTotal = $items->sum('discount_amount');
-        $afterLineDiscounts = $grossSubtotal - $lineDiscountTotal;
+
+        // v3.1.0 (M13): round subtotal AND total to 2dp BEFORE
+        // persisting — the old code stored the unrounded float sum, so
+        // the stored total could differ by a cent from
+        // subtotal-minus-discounts, and the stored due from
+        // total-minus-paid. Now: stored total == stored subtotal
+        // minus stored discounts, and stored due == stored total
+        // minus stored paid (signed for named customers, clamped at
+        // 0 for walk-in — see M1 note below).
+        $subtotal = round($grossSubtotal, 2);
+        $lineDiscountTotal = round($lineDiscountTotal, 2);
+        $afterLineDiscounts = $subtotal - $lineDiscountTotal;
 
         $overallDiscountAmount = round($afterLineDiscounts * ($order->discount_percent / 100), 2);
-        $total = $afterLineDiscounts - $overallDiscountAmount;
+        $total = round($afterLineDiscounts - $overallDiscountAmount, 2);
 
         // FIXED (M1): due_amount used to be clamped with max(0, ...) for
         // everyone, which silently erased a named customer's signed
@@ -500,15 +514,16 @@ class POSController extends Controller
         // stays SIGNED (total - paid; negative = advance), exactly as
         // complete() already computes it. Walk-in has no account to hold
         // an advance on, so it still clamps at 0 (the excess is change).
-        $order->update([
-            'subtotal' => $grossSubtotal,
+        // v3.1.0 (L4): total/due_amount are no longer fillable.
+        $order->forceFill([
+            'subtotal' => $subtotal,
             'line_discount_total' => $lineDiscountTotal,
             'discount_amount' => $overallDiscountAmount,
             'total' => $total,
             'due_amount' => $order->customer_id
                 ? round($total - $order->paid_amount, 2)
-                : max(0, $total - $order->paid_amount),
-        ]);
+                : max(0, round($total - $order->paid_amount, 2)),
+        ])->save();
     }
 
     public function complete(Request $request, Order $order)
@@ -547,7 +562,11 @@ class POSController extends Controller
         // OrderPayment row instead of silently dropping the till payment.
         $hasPayments = $order->payments()->exists();
 
-        DB::transaction(function () use ($order, $data, $hasPayments) {
+        // v3.1.0 (M17) — WARN, do not block: expired batches sold in this
+        // order are collected here and flashed separately below. The check
+        // itself must never throw, so it is wrapped in try/catch.
+        $expiredSaleWarnings = [];
+        DB::transaction(function () use ($order, $data, $hasPayments, &$expiredSaleWarnings) {
             // Lock the order row first and re-check status inside the
             // transaction (C1): without this, two concurrent completes
             // could both pass the pre-transaction status check.
@@ -572,6 +591,25 @@ class POSController extends Controller
                 $products[$item->product_id] = $product;
             }
 
+            // v3.1.0 (M17): which of the batches about to be consumed are
+            // already expired? Warning only — expired stock is still sold.
+            try {
+                if (Schema::hasTable('product_batches')) {
+                    foreach ($items as $warnItem) {
+                        $expired = ProductBatch::where('product_id', $warnItem->product_id)
+                            ->where('remaining_quantity', '>', 0)
+                            ->whereNotNull('expiry_date')
+                            ->whereDate('expiry_date', '<', now()->toDateString())
+                            ->orderBy('expiry_date')->get();
+                        foreach ($expired as $batch) {
+                            $expiredSaleWarnings[] = $products[$warnItem->product_id]->name . ' (batch ' . $batch->batch_no . ')';
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                report($e);
+            }
+
             foreach ($items as $item) {
                 $products[$item->product_id]->decrement('stock', $item->quantity);
                 // v3.0 FEATURE 1 — also decrement batches FIFO
@@ -580,8 +618,10 @@ class POSController extends Controller
                 // unbatched stock), only what batched stock exists is
                 // decremented and the rest is silently unbatched.
                 // consumeFifo() never throws, so a batch problem can
-                // never block or fail this sale.
-                ProductBatch::consumeFifo((int) $item->product_id, (float) $item->quantity);
+                // never block or fail this sale. v3.1.0 (H8): the
+                // order context is passed so a non-missing-table
+                // failure is logged with it and surfaced below.
+                ProductBatch::consumeFifo((int) $item->product_id, (float) $item->quantity, ['record' => "Order #{$locked->id}"]);
                 StockMovement::create([
                     'product_id' => $item->product_id,
                     'type' => 'sale',
@@ -663,7 +703,9 @@ class POSController extends Controller
                 }
             }
 
-            $locked->update([
+            // v3.1.0 (L4): status/paid_amount/due_amount are no longer
+            // fillable — the whole completion write goes via forceFill().
+            $locked->forceFill([
                 'status' => 'completed',
                 // A held/draft order that gets completed and paid for is a
                 // real sale now, not a quotation/estimate anymore — reset
@@ -685,7 +727,7 @@ class POSController extends Controller
                 // again — even when this same order is later reopened and
                 // re-completed through the "load order to edit" flow.
                 'original_completed_at' => $locked->original_completed_at ?? now(),
-            ]);
+            ])->save();
 
             if ($locked->customer_id && abs($due) > 0.004) {
                 $locked->customer()->increment('credit_balance', $due);
@@ -696,7 +738,20 @@ class POSController extends Controller
             $request->session()->forget('current_order_id');
         }
 
-        return redirect()->route('pos.invoice', $order)->with('status', 'Order completed.');
+        // v3.1.0 (H8): a batch failure never fails the sale, but it
+        // must not vanish silently either. There is no dedicated
+        // 'warning' flash slot in the layouts, so the warning is
+        // appended to the status message, which is always displayed.
+        $batchError = ProductBatch::takeLastBatchError();
+        $status = 'Order completed.'
+            . ($batchError ? " Warning: {$batchError}" : '');
+
+        $redirect = redirect()->route('pos.invoice', $order)->with('status', $status);
+        if ($expiredSaleWarnings !== []) {
+            $redirect->with('expiry_warning', 'Warning: expired stock was sold: ' . implode(', ', array_unique($expiredSaleWarnings)) . '. Sales are not blocked on expired stock yet.');
+        }
+
+        return $redirect;
     }
 
     public function saveAsQuotation(Request $request, Order $order)
@@ -711,7 +766,7 @@ class POSController extends Controller
             return back()->withErrors(['error' => 'Only an active or held order can be saved as a quotation. A completed order must be edited through "Load Order" / Edit instead.']);
         }
         $this->assertPosOrderAccess($order, $request);
-        $order->update(['is_quotation' => true, 'status' => 'hold']);
+        $order->forceFill(['is_quotation' => true, 'status' => 'hold'])->save();
         request()->session()->forget('current_order_id');
 
         return redirect()->route('pos.invoice', $order)->with('status', 'Saved as quotation/draft.');
@@ -761,6 +816,11 @@ class POSController extends Controller
 
     public function reorder(Request $request, Order $order)
     {
+        // v3.1.0 (M2): FIRST line — ownership guard, same as invoice()
+        // above. Previously any cashier could duplicate ANY order into
+        // their cart (with its customer and prices) by id.
+        $this->assertPosOrderAccess($order, $request);
+
         // FIXED (M4): validate every source product BEFORE touching the
         // current cart — an inactive product aborts the whole reorder
         // (422-style error on this redirect flow) instead of partially
@@ -770,6 +830,18 @@ class POSController extends Controller
             $product = $sourceItem->product;
             if ($product && !$product->is_active) {
                 return back()->withErrors(['error' => "Cannot re-order: {$product->name} is inactive."]);
+            }
+            // v3.1.0 (M2): re-apply the per-item max-discount check from
+            // updateItemDiscount() here, BEFORE the cart is touched. A
+            // cashier re-ordering an old order whose line discount was
+            // set above the product's current max (e.g. by a manager
+            // override at the time) is refused instead of silently
+            // copying the over-max discount verbatim; admin/manager
+            // may still re-order it, exactly as updateItemDiscount()
+            // allows their override.
+            $maxDiscount = $product ? (float) $product->max_discount_percent : 0;
+            if ($maxDiscount > 0 && (float) $sourceItem->discount_percent > $maxDiscount && auth()->user()->isCashier()) {
+                return back()->withErrors(['error' => "Cannot re-order: {$product->name} has a discount of {$sourceItem->discount_percent}%, above the max allowed ({$maxDiscount}%). Ask a manager to approve it."]);
             }
         }
 
@@ -785,7 +857,7 @@ class POSController extends Controller
             $current = Order::where('id', $currentId)->when(!$this->isPrivileged(), fn ($q) => $q->where('user_id', auth()->id()))->where('status', 'in_progress')->first();
             if ($current) {
                 if ($current->items()->count() > 0) {
-                    $current->update(['status' => 'hold']);
+                    $current->forceFill(['status' => 'hold'])->save();
                 } else {
                     $current->forceDelete();
                 }

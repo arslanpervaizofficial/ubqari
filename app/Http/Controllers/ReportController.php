@@ -416,10 +416,15 @@ class ReportController extends Controller
         // suppliers.balance (kept current by syncBalance() after every
         // PO receive/correction/delete and supplier return/payment).
         // Only POSITIVE balances count as liabilities — a negative
-        // balance is an advance paid TO a supplier, not something owed,
-        // and it is deliberately not added to Receivables either (that
-        // would need its own asset treatment; see CHANGES.txt).
+        // balance is an advance paid TO a supplier, not something owed.
+        // v3.1.0 (L10): the negative side is no longer invisible — it
+        // is shown as its own "Advances to suppliers" asset (same
+        // source column, same (float) sum, absolute value so the card
+        // reads as a positive asset) and added back into Net Capital
+        // below, mirroring how customer receivables are treated. It is
+        // deliberately NOT folded into Receivables or Liabilities.
         $supplierLiabilities = (float) Supplier::where('balance', '>', 0)->sum('balance');
+        $supplierAdvances = abs((float) Supplier::where('balance', '<', 0)->sum('balance'));
         $totalLiabilities = (float) CashParty::sum('balance') + $supplierLiabilities;
         // Money customers owe THE BUSINESS (a wholesale customer's running
         // tab — credit_balance, raised either by an unpaid due_amount on a
@@ -457,7 +462,10 @@ class ReportController extends Controller
         // does not change with this fix — only the Total Investment card
         // does. Borrowing raises Total Investment and Liabilities by the
         // same amount and leaves Net Capital untouched.
-        $netCapital = $totalInvestment - $totalExpenses - $totalLiabilities;
+        // v3.1.0 (L10): advances to suppliers are an asset the business
+        // owns (the supplier owes goods/money back), so they raise Net
+        // Capital exactly like receivables do.
+        $netCapital = $totalInvestment - $totalExpenses - $totalLiabilities + $supplierAdvances;
 
         // --- Standard Margin (Revenue − Cost of Goods Sold). The old
         // "Profit & Loss" card (discount-differential formula) was removed
@@ -529,7 +537,7 @@ class ReportController extends Controller
         $expenses = (clone $query)->with('user')->latest('expense_date')->latest('id')->get();
 
         return view('reports.capital', compact(
-            'totalInvestment', 'cumulativePurchaseCost', 'remainingInvestment', 'totalExpenses', 'netCapital', 'stockValue', 'cashInjected', 'totalLiabilities', 'supplierLiabilities', 'totalReceivables', 'customerReceivables', 'walkInDue', 'totalReturnsValue', 'totalReturnsCogs',
+            'totalInvestment', 'cumulativePurchaseCost', 'remainingInvestment', 'totalExpenses', 'netCapital', 'stockValue', 'cashInjected', 'totalLiabilities', 'supplierLiabilities', 'supplierAdvances', 'totalReceivables', 'customerReceivables', 'walkInDue', 'totalReturnsValue', 'totalReturnsCogs',
             'totalRevenue', 'approxCogs', 'approxGrossMargin', 'approxNetProfit',
             'monthly', 'year', 'byCategory', 'expenses', 'from', 'to', 'breakdownView', 'month'
         ));

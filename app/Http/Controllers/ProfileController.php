@@ -58,7 +58,15 @@ class ProfileController extends Controller
         }
         unset($data['password_confirmation']);
 
-        $user->update($data);
+        // v3.1.0 (L4): password is no longer in User::$fillable, so a
+        // profile password change must NOT ride on update($data) (it
+        // would silently drop the password). Name stays mass-assigned
+        // (still fillable); the password is assigned explicitly.
+        $user->forceFill(['name' => $data['name']]);
+        if ($passwordChanged) {
+            $user->forceFill(['password' => $data['password']]);
+        }
+        $user->save();
 
         // H20 (this side): clear the forced-change flag only when the
         // password actually changed — saving just a name must not clear

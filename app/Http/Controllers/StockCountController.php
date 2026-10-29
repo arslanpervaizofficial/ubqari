@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Product;
+use App\Models\ProductBatch;
 use App\Models\StockCount;
 use App\Models\StockCountItem;
 use App\Models\StockMovement;
@@ -26,11 +27,16 @@ use Illuminate\Support\Facades\DB;
  *  3. show — variance report: counted rows only (product, snapshot,
  *     counted, variance = counted - snapshot).
  *  4. approve — admin/manager only. Inside one DB transaction, every
- *     counted row sets its product's stock to the counted figure and
- *     writes exactly one StockMovement of type 'adjustment' with
- *     reason "Stock count #N" — no other movement type is ever used
- *     here. Uncounted rows are never touched. The count then becomes
- *     'approved' and can never be approved again or edited.
+ *     counted row's product row is locked and the APPLIED variance
+ *     (counted minus CURRENT stock, v3.1.0 M7 — not minus the
+ *     snapshot) is posted: stock is set to the counted figure under
+ *     the lock and exactly one StockMovement of type 'adjustment'
+ *     with reason "Stock count #N" and the applied quantity is
+ *     written — no other movement type is ever used here. A zero
+ *     applied delta writes no movement (v3.1.0 L11a). The snapshot
+ *     variance stays report-only on the item row. Uncounted rows are
+ *     never touched. The count then becomes 'approved' and can never
+ *     be approved again or edited.
  *  5. destroy — open counts only. The cascade on stock_count_items
  *     removes the items; products.stock is never touched.
  *
@@ -212,28 +218,57 @@ class StockCountController extends Controller
             }
 
             $adjusted = 0;
-            $items = $count->items()->whereNotNull('counted_stock')->with('product')->get();
+            // Locked in product-id order (deadlock-safe) below, so the
+            // loop sorts by product first. One item per product exists
+            // per count, so this ordering is total.
+            $items = $count->items()->whereNotNull('counted_stock')->with('product')->get()->sortBy('product_id')->values();
 
             foreach ($items as $item) {
-                $product = $item->product;
+                // v3.1.0 (M7): lock the product row and compute the
+                // variance against CURRENT stock, not the snapshot.
+                // The snapshot variance (counted - snapshot) stays
+                // REPORT-ONLY on the item row (the saving event
+                // recomputes it on save); what is actually APPLIED is
+                // counted - current. The old code set stock to the
+                // counted figure outright, silently discarding every
+                // sale/purchase that happened between snapshot and
+                // approve. Now only the counted-vs-current difference
+                // moves, so concurrent stock activity survives the
+                // count. Setting stock to the counted figure under
+                // the product lock is exactly that delta applied.
+                $product = Product::lockForUpdate()->find($item->product_id);
                 if (!$product) {
                     continue; // defensive only: the FK normally prevents this
                 }
 
+                $applied = round((float) $item->counted_stock - (float) $product->stock, 2);
+
                 // Recompute in case the row was saved before the
-                // saving-event rule existed; normally a no-op.
+                // saving-event rule existed; normally a no-op. This is
+                // the REPORT variance (counted - snapshot), untouched
+                // by the applied-delta change above.
                 $item->variance = round((float) $item->counted_stock - (float) $item->snapshot_stock, 2);
                 $item->save();
 
-                // Absolute set, not an increment: the counted figure is
-                // what the shelf actually holds, whatever the system
-                // stock has done since the snapshot was taken.
+                // v3.1.0 (L11a): a zero applied delta writes NO
+                // movement row and counts as no adjustment — a
+                // 0-quantity movement is noise in the history, and
+                // the product's stock is already exactly the counted
+                // figure (within rounding).
+                if (abs($applied) <= 0.004) {
+                    continue;
+                }
+
                 $product->update(['stock' => $item->counted_stock]);
+
+                // v3.1.0 (H7): the applied delta is mirrored in
+                // batches, in this same transaction.
+                ProductBatch::mirrorStockDelta((int) $item->product_id, $applied, ['record' => "Stock count #{$count->id}"]);
 
                 StockMovement::create([
                     'product_id' => $item->product_id,
                     'type' => 'adjustment',
-                    'quantity' => $item->variance,
+                    'quantity' => $applied,
                     'reason' => "Stock count #{$count->id}",
                     'user_id' => auth()->id(),
                 ]);

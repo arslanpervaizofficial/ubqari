@@ -78,14 +78,19 @@ class AccountingController extends Controller
 
         $totals = $this->accounting->accountTotals($from, $to);
 
-        // Revenue is a net credit; COGS and Expenses are net debits.
+        // Revenue is a net credit; Sales Returns, COGS and Expenses
+        // are net debits. v3.1.0 (M11): Sales Returns (customer-return
+        // credits) is contra-revenue, so it is subtracted from revenue
+        // — without this, returns would overstate profit and the
+        // Balance Sheet retained figure would not reconcile.
         $revenue = round($totals['Sales Revenue']['credit'] - $totals['Sales Revenue']['debit'], 2);
+        $salesReturns = round($totals['Sales Returns']['debit'] - $totals['Sales Returns']['credit'], 2);
         $cogs = round($totals['COGS']['debit'] - $totals['COGS']['credit'], 2);
         $expenses = round($totals['Expenses']['debit'] - $totals['Expenses']['credit'], 2);
-        $net = round($revenue - $cogs - $expenses, 2);
+        $net = round($revenue - $salesReturns - $cogs - $expenses, 2);
 
         return view('accounting.profit_loss', compact(
-            'from', 'to', 'revenue', 'cogs', 'expenses', 'net'
+            'from', 'to', 'revenue', 'salesReturns', 'cogs', 'expenses', 'net'
         ));
     }
 
@@ -121,8 +126,11 @@ class AccountingController extends Controller
         $totalLiabilities = round(array_sum($liabilities), 2);
 
         $capital = $netCredit('Capital');
+        // v3.1.0 (M11): retained profit nets off Sales Returns, exactly
+        // like profitLoss() above, so the Balance Sheet still balances
+        // (difference 0) when return credits have been posted.
         $retained = round(
-            $netCredit('Sales Revenue') - $netDebit('COGS') - $netDebit('Expenses'),
+            $netCredit('Sales Revenue') - $netDebit('Sales Returns') - $netDebit('COGS') - $netDebit('Expenses'),
             2
         );
         $totalEquity = round($capital + $retained, 2);

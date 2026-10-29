@@ -153,6 +153,13 @@
 console.log('POS billing JS — build 2026-09-20-b (Enter-to-Quantity-to-Discount focus fix)');
 
 const csrf = document.querySelector('meta[name="csrf-token"]').content;
+// v3.1.0 (L7d): item URLs are rendered by Blade from the named routes
+// below (routes/web.php: pos.update-item, pos.update-item-discount,
+// pos.remove-item) instead of hardcoded '/pos/item/...' strings, so a
+// future route-prefix change cannot silently break the cart. The
+// '__ITEM_ID__' placeholder is swapped for the real id at call time.
+const posItemUrlTemplate = '{{ route('pos.update-item', ['item' => '__ITEM_ID__']) }}';
+const posItemDiscountUrlTemplate = '{{ route('pos.update-item-discount', ['item' => '__ITEM_ID__']) }}';
 const INTEGER_UNITS = ['piece','pcs','dozen','box','pack','carton','unit'];
 function isIntegerUnit(unit) { return INTEGER_UNITS.includes((unit||'').toLowerCase()); }
 
@@ -404,9 +411,9 @@ document.getElementById('cart-body').addEventListener('change', async function (
     try {
         let data;
         if (e.target.classList.contains('qty-input')) {
-            data = await api(`/pos/item/${itemId}`, 'PATCH', { quantity: e.target.value });
+            data = await api(posItemUrlTemplate.replace('__ITEM_ID__', itemId), 'PATCH', { quantity: e.target.value });
         } else {
-            data = await api(`/pos/item/${itemId}/discount`, 'PATCH', { discount_percent: e.target.value });
+            data = await api(posItemDiscountUrlTemplate.replace('__ITEM_ID__', itemId), 'PATCH', { discount_percent: e.target.value });
         }
         // Both quantity and discount responses can carry a warning (stock
         // exceeded / max discount exceeded) — show it every time, not just
@@ -468,7 +475,7 @@ document.getElementById('cart-body').addEventListener('click', async function (e
     if (!btn) return;
     const itemId = btn.dataset.itemId;
     try {
-        const data = await api(`/pos/item/${itemId}`, 'DELETE');
+        const data = await api(posItemUrlTemplate.replace('__ITEM_ID__', itemId), 'DELETE');
         renderOrder(data.order);
     } catch (err) {
         // This request has no error path shown to the user at all before —

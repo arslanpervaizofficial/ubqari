@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class StockReturn extends Model
 {
@@ -55,49 +57,98 @@ class StockReturn extends Model
      *  Caller wraps this in a DB transaction. */
     public function reverseEffects(): void
     {
-        if (!$this->product) {
-            return;
-        }
-
-        if ($this->type === 'from_customer') {
-            if ($this->product->stock < $this->quantity) {
-                throw new \RuntimeException(
-                    "Can't delete this return: \"{$this->product->name}\" only has {$this->product->stock} in stock, "
-                    . "but this return added {$this->quantity} — some of it has already been sold. "
-                    . 'Reduce stock consumption before deleting this return.'
-                );
+        // v3.1.0 (C2): own transaction + return row locked (withTrashed
+        // so the restore path's inverse locks too). The legs below are
+        // SPLIT (v3.1.0 L11d): the old code returned early when the
+        // product was missing, silently skipping the customer-credit
+        // reversal. Now each leg runs on what it actually needs —
+        // stock leg needs the product, PO leg needs the PO line, credit
+        // leg needs neither — and only the leg that needs a missing
+        // record is skipped (logged). v3.1.0 (H7): stock moves are
+        // mirrored in batches. v3.1.0 (H11): a linked customer return
+        // also puts its net amount back onto the source order's
+        // due_amount (the forward return reduced it).
+        DB::transaction(function () {
+            $locked = static::withTrashed()->lockForUpdate()->find($this->id);
+            if (!$locked) {
+                return;
             }
-            $this->product->decrement('stock', $this->quantity);
-        } else {
-            $this->product->increment('stock', $this->quantity);
-        }
 
-        // v2.2 (R2): a supplier return reduced the PO line's
-        // received_quantity at return time (H8 net invariant), so
-        // deleting the return must put it back and recompute the PO
-        // totals — otherwise the line stays reduced forever and the
-        // same units can be "returned" a second time. Runs in the
-        // caller's transaction, same as the stock move above.
-        if ($this->type === 'to_supplier') {
-            $this->adjustPoHeldQuantity((float) $this->quantity);
-        }
-
-        StockMovement::where('stock_return_id', $this->id)->delete();
-
-        // H5 — reverse the refund credit this return created, if any.
-        // The note is soft-deleted (not force-deleted) so that
-        // restoreEffects() can put exactly this note back if the return
-        // is ever restored, and so a return recorded before the
-        // stock_return_id link existed is untouched: it has no linked
-        // note, so nothing is reversed for it here.
-        if ($this->type === 'from_customer') {
-            foreach (CustomerPayment::where('stock_return_id', $this->id)->get() as $payment) {
-                if ($payment->customer) {
-                    $payment->customer->increment('credit_balance', $payment->amount);
+            // Stock leg (needs the product; guard reads a locked row).
+            $product = $locked->product_id
+                ? Product::lockForUpdate()->find($locked->product_id)
+                : null;
+            if ($product) {
+                if ($locked->type === 'from_customer') {
+                    if ((float) $product->stock < (float) $locked->quantity) {
+                        throw new \RuntimeException(
+                            "Can't delete this return: \"{$product->name}\" only has {$product->stock} in stock, "
+                            . "but this return added {$locked->quantity} — some of it has already been sold. "
+                            . 'Reduce stock consumption before deleting this return.'
+                        );
+                    }
+                    $product->decrement('stock', $locked->quantity);
+                    ProductBatch::mirrorStockDelta((int) $locked->product_id, -(float) $locked->quantity, ['record' => "Stock return #{$locked->id}"]);
+                } else {
+                    $product->increment('stock', $locked->quantity);
+                    ProductBatch::mirrorStockDelta((int) $locked->product_id, (float) $locked->quantity, ['record' => "Stock return #{$locked->id}"]);
                 }
-                $payment->delete();
+            } else {
+                Log::warning('Stock return reversal skipped stock leg: product missing (force-deleted). Credit/PO legs still run.', [
+                    'stock_return_id' => $locked->id, 'product_id' => $locked->product_id, 'quantity' => $locked->quantity,
+                ]);
             }
-        }
+
+            // v2.2 (R2): a supplier return reduced the PO line's
+            // received_quantity at return time (H8 net invariant), so
+            // deleting the return must put it back and recompute the PO
+            // totals — otherwise the line stays reduced forever and the
+            // same units can be "returned" a second time. Runs in the
+            // caller's transaction, same as the stock move above.
+            if ($locked->type === 'to_supplier') {
+                $locked->adjustPoHeldQuantity((float) $locked->quantity);
+            }
+
+            StockMovement::where('stock_return_id', $locked->id)->delete();
+
+            // H5 — reverse the refund credit this return created, if any.
+            // The note is soft-deleted (not force-deleted) so that
+            // restoreEffects() can put exactly this note back if the return
+            // is ever restored, and so a return recorded before the
+            // stock_return_id link existed is untouched: it has no linked
+            // note, so nothing is reversed for it here.
+            // This leg does NOT need the product, so it runs even when
+            // the stock leg above was skipped (L11d).
+            if ($locked->type === 'from_customer') {
+                foreach (CustomerPayment::where('stock_return_id', $locked->id)->get() as $payment) {
+                    if ($payment->customer) {
+                        $payment->customer->increment('credit_balance', $payment->amount);
+                    }
+                    $payment->delete();
+                }
+
+                // H11 — put the returned amount back on the source
+                // order's due (the forward return reduced it). Live
+                // orders only: a trashed order's due is stale and its
+                // own restore re-applies its effects separately.
+                // CAVEAT (pre-fix returns): returns recorded before
+                // v3.1.0 never reduced the order due, so reversing one
+                // of those now overstates its due by the net amount.
+                // That set shrinks with time and the figure stays
+                // visible (and correctable) on the order ledger; new
+                // returns are symmetric by construction.
+                if ($locked->order_id) {
+                    $order = Order::lockForUpdate()->find($locked->order_id);
+                    if ($order) {
+                        $order->increment('due_amount', $locked->net_amount);
+                    } else {
+                        Log::warning('Stock return reversal skipped order-due leg: source order not live.', [
+                            'stock_return_id' => $locked->id, 'order_id' => $locked->order_id,
+                        ]);
+                    }
+                }
+            }
+        });
     }
 
     /** The exact inverse of reverseEffects() — used when a stock return is
@@ -114,70 +165,110 @@ class StockReturn extends Model
      *  delete/restore stay exact inverses without ever double-applying. */
     public function restoreEffects(): void
     {
-        if (!$this->product) {
-            return;
-        }
-
-        // v2.2 (R2): guard the PO side BEFORE anything is mutated — if
-        // the PO line was corrected downward after this return was
-        // recorded, taking the return back would drive the net held
-        // figure negative. The caller wraps this in a transaction, so
-        // throwing here still rolls everything back.
-        if ($this->type === 'to_supplier') {
-            $poItem = $this->purchaseOrderItem;
-            if ($poItem && (float) $poItem->received_quantity < (float) $this->quantity) {
-                throw new \RuntimeException(
-                    "Can't restore this return: the PO line for \"{$this->product->name}\" only holds {$poItem->received_quantity} now, "
-                    . "but this return is for {$this->quantity} — the line was corrected after the return. "
-                    . 'Fix the PO line first, then restore this return.'
-                );
+        // v3.1.0 (C2/L11d): same locked, split-leg shape as
+        // reverseEffects() — own transaction, return row locked
+        // (withTrashed: restore runs while the row is still trashed).
+        // A missing product skips only the stock leg and the movement
+        // row (which needs a live product_id FK); the PO and credit
+        // legs still run. v3.1.0 (H7): stock moves mirrored in
+        // batches. v3.1.0 (H11): a linked customer return reduces the
+        // source order's due again (inverse of the reverse leg).
+        DB::transaction(function () {
+            $locked = static::withTrashed()->lockForUpdate()->find($this->id);
+            if (!$locked) {
+                return;
             }
-        }
 
-        if ($this->type === 'from_customer') {
-            $this->product->increment('stock', $this->quantity);
-            $reason = 'Customer return restored from Trash';
-            $movementQty = $this->quantity;
-        } else {
-            if ($this->product->stock < $this->quantity) {
-                throw new \RuntimeException(
-                    "Can't restore this return: \"{$this->product->name}\" only has {$this->product->stock} in stock, "
-                    . "but restoring this supplier return would remove {$this->quantity} — some of it has already been sold. "
-                    . 'Increase stock before restoring this return.'
-                );
-            }
-            $this->product->decrement('stock', $this->quantity);
-            $reason = 'Supplier return restored from Trash';
-            $movementQty = -$this->quantity;
-        }
-
-        StockMovement::create([
-            'product_id' => $this->product_id,
-            'type' => 'adjustment',
-            'quantity' => $movementQty,
-            'reason' => $reason,
-            'user_id' => auth()->id(),
-            'stock_return_id' => $this->id,
-        ]);
-
-        // v2.2 (R2): exact inverse of the reverseEffects() addition
-        // above — restoring a supplier return takes the units back out
-        // of the PO line's net held quantity and recomputes PO totals.
-        if ($this->type === 'to_supplier') {
-            $this->adjustPoHeldQuantity(-(float) $this->quantity);
-        }
-
-        if ($this->type === 'from_customer') {
-            foreach (CustomerPayment::withTrashed()->where('stock_return_id', $this->id)->get() as $payment) {
-                if (!$payment->trashed()) {
-                    continue; // already restored on its own — balance already re-applied
-                }
-                $payment->restore();
-                if ($payment->customer) {
-                    $payment->customer->decrement('credit_balance', $payment->amount);
+            // v2.2 (R2): guard the PO side BEFORE anything is mutated — if
+            // the PO line was corrected downward after this return was
+            // recorded, taking the return back would drive the net held
+            // figure negative. The caller wraps this in a transaction, so
+            // throwing here still rolls everything back.
+            if ($locked->type === 'to_supplier') {
+                $poItem = $locked->purchaseOrderItem;
+                if ($poItem && (float) $poItem->received_quantity < (float) $locked->quantity) {
+                    throw new \RuntimeException(
+                        "Can't restore this return: the PO line for \"{$poItem->product?->name}\" only holds {$poItem->received_quantity} now, "
+                        . "but this return is for {$locked->quantity} — the line was corrected after the return. "
+                        . 'Fix the PO line first, then restore this return.'
+                    );
                 }
             }
-        }
+
+            $product = $locked->product_id
+                ? Product::lockForUpdate()->find($locked->product_id)
+                : null;
+
+            $movementQty = null;
+            $reason = null;
+            if ($product) {
+                if ($locked->type === 'from_customer') {
+                    $product->increment('stock', $locked->quantity);
+                    ProductBatch::mirrorStockDelta((int) $locked->product_id, (float) $locked->quantity, ['record' => "Stock return #{$locked->id}"]);
+                    $reason = 'Customer return restored from Trash';
+                    $movementQty = $locked->quantity;
+                } else {
+                    if ((float) $product->stock < (float) $locked->quantity) {
+                        throw new \RuntimeException(
+                            "Can't restore this return: \"{$product->name}\" only has {$product->stock} in stock, "
+                            . "but restoring this supplier return would remove {$locked->quantity} — some of it has already been sold. "
+                            . 'Increase stock before restoring this return.'
+                        );
+                    }
+                    $product->decrement('stock', $locked->quantity);
+                    ProductBatch::mirrorStockDelta((int) $locked->product_id, -(float) $locked->quantity, ['record' => "Stock return #{$locked->id}"]);
+                    $reason = 'Supplier return restored from Trash';
+                    $movementQty = -$locked->quantity;
+                }
+            } else {
+                Log::warning('Stock return restore skipped stock leg: product missing (force-deleted). Credit/PO legs still run.', [
+                    'stock_return_id' => $locked->id, 'product_id' => $locked->product_id, 'quantity' => $locked->quantity,
+                ]);
+            }
+
+            if ($movementQty !== null) {
+                StockMovement::create([
+                    'product_id' => $locked->product_id,
+                    'type' => 'adjustment',
+                    'quantity' => $movementQty,
+                    'reason' => $reason,
+                    'user_id' => auth()->id(),
+                    'stock_return_id' => $locked->id,
+                ]);
+            }
+
+            // v2.2 (R2): exact inverse of the reverseEffects() addition
+            // above — restoring a supplier return takes the units back out
+            // of the PO line's net held quantity and recomputes PO totals.
+            if ($locked->type === 'to_supplier') {
+                $locked->adjustPoHeldQuantity(-(float) $locked->quantity);
+            }
+
+            if ($locked->type === 'from_customer') {
+                foreach (CustomerPayment::withTrashed()->where('stock_return_id', $locked->id)->get() as $payment) {
+                    if (!$payment->trashed()) {
+                        continue; // already restored on its own — balance already re-applied
+                    }
+                    $payment->restore();
+                    if ($payment->customer) {
+                        $payment->customer->decrement('credit_balance', $payment->amount);
+                    }
+                }
+
+                // H11 — inverse of the reverse leg: the restored return
+                // counts against the source order's due again.
+                if ($locked->order_id) {
+                    $order = Order::lockForUpdate()->find($locked->order_id);
+                    if ($order) {
+                        $order->decrement('due_amount', $locked->net_amount);
+                    } else {
+                        Log::warning('Stock return restore skipped order-due leg: source order not live.', [
+                            'stock_return_id' => $locked->id, 'order_id' => $locked->order_id,
+                        ]);
+                    }
+                }
+            }
+        });
     }
 
     /** v2.2 (R2): the PO side of a supplier return's reversal. A

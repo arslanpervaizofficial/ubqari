@@ -135,11 +135,15 @@
                     <svg class="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
                     {{ __('Accounting') }}
                 </a>
+                <a href="{{ route('online-payments.index') }}" class="sidebar-link {{ request()->routeIs('online-payments.*') ? 'active' : '' }}">
+                    <svg class="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+                    {{ __('Online Payments') }}
+                </a>
                 <a href="{{ route('sms-logs.index') }}" class="sidebar-link {{ request()->routeIs('sms-logs.*') ? 'active' : '' }}">
                     <svg class="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
                     {{ __('SMS Log') }}
                 </a>
-                <a href="{{ route('dashboard') }}#expiring-soon" class="sidebar-link {{ request()->routeIs('dashboard') ? 'active' : '' }}">
+                <a href="{{ route('batches.index') }}" class="sidebar-link {{ request()->routeIs('batches.*') ? 'active' : '' }}">
                     <svg class="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                     {{ __('Batches / Expiry') }}
                 </a>
@@ -213,6 +217,9 @@
         <main class="p-4 md:p-6 flex-1 w-full min-w-0 print:p-0 overflow-x-hidden">
             @if(session('status'))
                 <div class="mb-4 bg-green-100 text-green-800 px-4 py-2 rounded-lg print:hidden">{{ session('status') }}</div>
+            @endif
+            @if(session('expiry_warning'))
+                <div class="mb-4 bg-amber-100 text-amber-800 px-4 py-2 rounded-lg print:hidden">{{ session('expiry_warning') }}</div>
             @endif
             @if($errors->any())
                 <div class="mb-4 bg-red-100 text-red-800 px-4 py-2 rounded-lg print:hidden">

@@ -47,7 +47,18 @@ class SettingController extends Controller
         $data['jazzcash_live_mode'] = $request->boolean('jazzcash_live_mode');
         $data['easypaisa_live_mode'] = $request->boolean('easypaisa_live_mode');
 
-        AppSetting::current()->update($data);
+        // v3.1.0 (L4): secret fields are no longer in
+        // AppSetting::$fillable, so they are assigned explicitly while
+        // the plain settings still go through update(). The blank-means-
+        // keep behaviour above is unchanged: secrets absent from $data
+        // are never touched here.
+        $secrets = array_intersect_key($data, array_flip(['sms_api_key', 'jazzcash_password', 'jazzcash_integrity_salt', 'easypaisa_hash_key']));
+        $plain = array_diff_key($data, $secrets);
+        $settings = AppSetting::current();
+        $settings->update($plain);
+        if ($secrets) {
+            $settings->forceFill($secrets)->save();
+        }
         AppSetting::forget();
 
         return back()->with('status', 'Project settings saved.');
