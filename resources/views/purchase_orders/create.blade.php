@@ -101,7 +101,6 @@
         <!-- FIX 1: temporary save only — NO final order, NO stock change -->
         <button type="button" id="po-save-draft" class="btn btn-gray">{{ __('Save Draft') }}</button>
         <button type="button" id="po-restore-draft" class="btn btn-gray">{{ __('Restore Draft') }}</button>
-        <span id="draft-status" class="text-sm text-gray-500 self-center"></span>
         <button type="button" id="po-print-btn" class="btn btn-gray">
             <svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m0-10V5a2 2 0 012-2h6a2 2 0 012 2v2m-10 0h10m-10 5h.01M7 17h10v4H7v-4z"/></svg>
             {{ __('Print Estimate') }}
@@ -516,7 +515,7 @@ if (INITIAL_LINES.length) {
 // ================= FIX 1: draft autosave + browser copy =================
 const poForm = document.getElementById('po-form');
 const draftIdInput = document.getElementById('draft_id');
-const draftStatusEl = document.getElementById('draft-status');
+const draftStatusEl = document.getElementById('draft-status') || {}; // v3.0.5: hint line removed, fallback keeps status writes harmless
 const STORAGE_KEY = 'ubqari_po_draft_' + CURRENT_USER_ID;
 let sessionExpired = false;
 let autosaveTimer = null;
