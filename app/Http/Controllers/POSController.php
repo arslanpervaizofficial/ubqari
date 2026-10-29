@@ -7,6 +7,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderPayment;
 use App\Models\Product;
+use App\Models\ProductBatch;
 use App\Models\StockMovement;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -573,6 +574,14 @@ class POSController extends Controller
 
             foreach ($items as $item) {
                 $products[$item->product_id]->decrement('stock', $item->quantity);
+                // v3.0 FEATURE 1 — also decrement batches FIFO
+                // (earliest expiry first). product.stock above stays
+                // the authority: if batched remaining is short (old
+                // unbatched stock), only what batched stock exists is
+                // decremented and the rest is silently unbatched.
+                // consumeFifo() never throws, so a batch problem can
+                // never block or fail this sale.
+                ProductBatch::consumeFifo((int) $item->product_id, (float) $item->quantity);
                 StockMovement::create([
                     'product_id' => $item->product_id,
                     'type' => 'sale',

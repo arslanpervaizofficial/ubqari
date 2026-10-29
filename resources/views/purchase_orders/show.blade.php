@@ -2,13 +2,13 @@
 @section('title', 'PO #' . $purchaseOrder->id)
 @section('content')
 <div class="flex justify-between items-center mb-1">
-    <h1 class="text-2xl font-bold">PO #{{ $purchaseOrder->id }}</h1>
-    <a href="{{ route('purchase-orders.index') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back</a>
+    <h1 class="text-2xl font-bold">{{ __('PO #') }}{{ $purchaseOrder->id }}</h1>
+    <a href="{{ route('purchase-orders.index') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> {{ __('Back') }}</a>
 </div>
-<p class="text-sm text-gray-500 mb-4">Supplier: {{ $purchaseOrder->supplier->name ?? '— (deleted supplier)' }} — Received</p>
+<p class="text-sm text-gray-500 mb-4">{{ __('Supplier') }}: {{ $purchaseOrder->supplier->name ?? __('— (deleted supplier)') }} {{ __('— Received') }}</p>
 
 <div class="mb-4 bg-blue-50 text-blue-800 text-sm px-4 py-2 rounded-lg">
-    Click <strong>Still held (net of returns)</strong> or <strong>Discount %</strong> to correct a mistake — it saves automatically when you click away or press Enter. Stock and totals update live. "Still held" is what is actually left in stock from this line after any supplier returns, not the gross quantity that arrived. Product and Cost Price aren't editable here; those aren't corrections, they'd be a different purchase.
+    {{ __('Click') }} <strong>{{ __('Still held (net of returns)') }}</strong> or <strong>{{ __('Discount %') }}</strong> {{ __('to correct a mistake — it saves automatically when you click away or press Enter. Stock and totals update live. "Still held" is what is actually left in stock from this line after any supplier returns, not the gross quantity that arrived. Product and Cost Price aren\'t editable here; those aren\'t corrections, they\'d be a different purchase.') }}
 </div>
 
 <div class="bg-white p-6 rounded-xl shadow-sm w-full">
@@ -16,14 +16,14 @@
     <table class="w-full text-sm mb-4" id="po-items-table">
         <thead class="text-left text-gray-500">
             <tr>
-                <th class="py-2 pr-4">Product</th>
-                <th class="px-4">Ordered Qty</th>
-                <th class="px-4">Still held <span class="text-gray-400 font-normal">(net of returns, click to edit)</span></th>
-                <th class="px-4">Current Stock</th>
-                <th class="px-4">Cost Price</th>
-                <th class="px-4">Discount % <span class="text-gray-400 font-normal">(click to edit)</span></th>
-                <th class="px-4">Line Total</th>
-                <th class="px-4">Action</th><!-- FIX 4: per-line delete -->
+                <th class="py-2 pr-4">{{ __('Product') }}</th>
+                <th class="px-4">{{ __('Ordered Qty') }}</th>
+                <th class="px-4">{{ __('Still held') }} <span class="text-gray-400 font-normal">{{ __('(net of returns, click to edit)') }}</span></th>
+                <th class="px-4">{{ __('Current Stock') }}</th>
+                <th class="px-4">{{ __('Cost Price') }}</th>
+                <th class="px-4">{{ __('Discount %') }} <span class="text-gray-400 font-normal">{{ __('(click to edit)') }}</span></th>
+                <th class="px-4">{{ __('Line Total') }}</th>
+                <th class="px-4">{{ __('Action') }}</th><!-- FIX 4: per-line delete -->
             </tr>
         </thead>
         <tbody>
@@ -48,12 +48,12 @@
                               onsubmit="return confirm('Ye line delete kar di jaye gi aur stock {{ $item->received_quantity }} {{ $item->product->unit }} se kam ho jaye ga. Continue karein?');"
                               class="inline">
                             @csrf @method('DELETE')
-                            <button class="btn btn-red">Delete</button>
+                            <button class="btn btn-red">{{ __('Delete') }}</button>
                         </form>
                     @elseif($item->can_delete)
-                        <button class="btn btn-gray" disabled title="{{ $item->delete_block_reason ?? 'Delete route abhi add nahi hui' }}">Delete</button>
+                        <button class="btn btn-gray" disabled title="{{ $item->delete_block_reason ?? 'Delete route abhi add nahi hui' }}">{{ __('Delete') }}</button>
                     @else
-                        <button class="btn btn-gray" disabled title="{{ $item->delete_block_reason }}">Delete</button>
+                        <button class="btn btn-gray" disabled title="{{ $item->delete_block_reason }}">{{ __('Delete') }}</button>
                     @endif
                 </td>
             </tr>
@@ -64,14 +64,14 @@
 
     <div class="flex justify-end">
         <div class="text-right space-y-1">
-            <div class="text-gray-500 text-sm">Subtotal (after each item's own discount): <span class="font-medium text-gray-800" id="po-subtotal">{{ number_format($purchaseOrder->subtotal, 2) }}</span></div>
+            <div class="text-gray-500 text-sm">{{ __('Subtotal (after each item\'s own discount)') }}: <span class="font-medium text-gray-800" id="po-subtotal">{{ number_format($purchaseOrder->subtotal, 2) }}</span></div>
             <div class="text-gray-500 text-sm">
-                Overall Discount %:
+                {{ __('Overall Discount %') }}:
                 <span class="editable-field cursor-pointer border-b border-dashed border-gray-400 hover:bg-yellow-50 px-1" id="po-overall-discount" data-value="{{ $purchaseOrder->discount_percent }}">{{ $purchaseOrder->discount_percent }}</span>%
                 (<span id="po-discount-amount">{{ number_format($purchaseOrder->discount_amount, 2) }}</span>)
             </div>
-            <div class="text-xl font-bold">Total: <span id="po-total">{{ number_format($purchaseOrder->total, 2) }}</span></div>
-            <div class="text-gray-500 text-sm">Total Products: {{ $purchaseOrder->items->count() }} &nbsp;·&nbsp; Total Received Quantity: {{ $purchaseOrder->items->sum('received_quantity') }}</div>
+            <div class="text-xl font-bold">{{ __('Total') }}: <span id="po-total">{{ number_format($purchaseOrder->total, 2) }}</span></div>
+            <div class="text-gray-500 text-sm">{{ __('Total Products') }}: {{ $purchaseOrder->items->count() }} &nbsp;·&nbsp; Total Received Quantity: {{ $purchaseOrder->items->sum('received_quantity') }}</div>
         </div>
     </div>
 </div>

@@ -15,6 +15,21 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'role' => RoleMiddleware::class,
         ]);
+        // v3.0 FEATURE 9: payment gateways post callbacks server-to-server
+        // with no shop session/CSRF token — exempt only these callback
+        // URLs (the initiate form stays CSRF-protected). No withCommands()
+        // line is needed for the scheduled-backup command: Laravel 12
+        // auto-discovers app/Console/Commands (verified in framework
+        // ApplicationBuilder code).
+        $middleware->validateCsrfTokens(except: [
+            'online-payments/callback/*',
+        ]);
+        // v3.0 FEATURE 8: locale from session (default English). Appended
+        // to the web group so it runs after StartSession, which the
+        // session read depends on.
+        $middleware->web(append: [
+            \App\Http\Middleware\SetLocale::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         // Session/CSRF token expired (e.g. the tab sat idle past

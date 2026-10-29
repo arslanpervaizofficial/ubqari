@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Order;
+use App\Services\PaymentGatewayService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -243,5 +244,59 @@ class OrderController extends Controller
 
         $label = $data['type'] === 'credit' ? 'Payment recorded' : 'Charge added';
         return back()->with('status', "{$label}: {$data['amount']}. Order balance updated.");
+    }
+
+    /** FEATURE 9 — start a JazzCash/Easypaisa payment for this order.
+     *  The ONLY method added to OrderController by this feature; every
+     *  other method above is the v2.2 version untouched.
+     *
+     *  Access mirrors the ledger page's intent: admin/manager, or the
+     *  cashier who owns the order (order->user_id). NOTE for the
+     *  coordinator: the ledger route itself lives in the admin/manager
+     *  group, so put THIS route in the plain 'auth' group (see
+     *  routes-fragment.txt) or the cashier branch can never be reached
+     *  — the controller check below is still the enforcement point.
+     *
+     *  Validates gateway (jazzcash/easypaisa only) and amount > 0, and
+     *  — beyond the spec's minimum, because recordPayment() itself
+     *  rejects a credit above the due — also rejects an amount above
+     *  the order's current due_amount and any payment on a cancelled
+     *  order. Then it delegates to PaymentGatewayService::initiate()
+     *  (which creates the PENDING OnlinePayment row) and renders the
+     *  gateway's hosted-checkout form view. No order total, status, or
+     *  ledger row is changed here: money is only recorded later, by a
+     *  verified callback in OnlinePaymentController. */
+    public function initiateOnlinePayment(Request $request, Order $order)
+    {
+        $user = $request->user();
+        if (!in_array($user->role, ['admin', 'manager'], true) && $order->user_id !== $user->id) {
+            abort(403, 'You do not have permission to access this page.');
+        }
+
+        if ($order->status === 'cancelled') {
+            return back()->withErrors(['error' => 'Online payments cannot be started for a cancelled order.']);
+        }
+
+        $data = $request->validate([
+            'gateway' => ['required', 'in:jazzcash,easypaisa'],
+            'amount' => ['required', 'numeric', 'min:0.01'],
+        ]);
+
+        if ($data['amount'] > (float) $order->due_amount) {
+            return back()->withErrors(['amount' => "Amount ({$data['amount']}) is more than what's still due on this order ({$order->due_amount})."]);
+        }
+
+        $result = app(PaymentGatewayService::class)->initiate(
+            $order, $data['gateway'], (float) $data['amount'], $user->id
+        );
+
+        return view('orders.online-payment-redirect', [
+            'order' => $order,
+            'payment' => $result['payment'],
+            'gateway' => $result['gateway'],
+            'action' => $result['action'],
+            'fields' => $result['fields'],
+            'is_live' => $result['is_live'],
+        ]);
     }
 }

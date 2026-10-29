@@ -1,24 +1,24 @@
 @extends('layouts.app')
-@section('title', 'Products')
+@section('title', __('Products'))
 @section('content')
 <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
-    <h1 class="text-2xl font-bold">Products</h1>
+    <h1 class="text-2xl font-bold">{{ __('Products') }}</h1>
     <div class="flex items-center gap-2">
         <a href="{{ route('products.export') }}" class="btn btn-gray">
             <svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/></svg>
-            Export Price List
+            {{ __('Export Price List') }}
         </a>
         <form method="POST" action="{{ route('products.import') }}" enctype="multipart/form-data" class="flex items-center gap-2">
             @csrf
             <button type="button" class="btn btn-gray" onclick="document.getElementById('import-file-input').click()">
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
-                Choose File
+                {{ __('Choose File') }}
             </button>
-            <span id="import-file-name" class="text-sm text-gray-500 max-w-[130px] truncate">No file chosen</span>
+            <span id="import-file-name" class="text-sm text-gray-500 max-w-[130px] truncate">{{ __('No file chosen') }}</span>
             <input type="file" id="import-file-input" name="file" accept=".xlsx" required data-label="Price list file" class="hidden">
-            <button class="btn btn-dark whitespace-nowrap">Import</button>
+            <button class="btn btn-dark whitespace-nowrap">{{ __('Import') }}</button>
         </form>
-        <a href="{{ route('products.create') }}" class="btn btn-dark">+ Add Product</a>
+        <a href="{{ route('products.create') }}" class="btn btn-dark">+ {{ __('Add Product') }}</a>
     </div>
 </div>
 @error('file') <p class="text-red-600 text-sm mb-3">{{ $message }}</p> @enderror
@@ -30,21 +30,21 @@ document.getElementById('import-file-input').addEventListener('change', function
 </script>
 
 <div class="flex gap-2 mb-4">
-    <a href="{{ route('products.index') }}" class="btn {{ !$showInactive ? 'btn-dark' : 'btn-gray' }}">Active Products</a>
-    <a href="{{ route('products.index', ['inactive' => 1]) }}" class="btn {{ $showInactive ? 'btn-dark' : 'btn-gray' }}">Disabled ({{ $inactiveCount }})</a>
+    <a href="{{ route('products.index') }}" class="btn {{ !$showInactive ? 'btn-dark' : 'btn-gray' }}">{{ __('Active Products') }}</a>
+    <a href="{{ route('products.index', ['inactive' => 1]) }}" class="btn {{ $showInactive ? 'btn-dark' : 'btn-gray' }}">{{ __('Disabled (') }}{{ $inactiveCount }})</a>
 </div>
 
 <form method="GET" data-ajax-filter="products" class="mb-4 flex gap-2">
     @if($showInactive)<input type="hidden" name="inactive" value="1">@endif
-    <input type="text" name="search" value="{{ request('search') }}" placeholder="Search name/SKU/barcode..."
+    <input type="text" name="search" value="{{ request('search') }}" placeholder="{{ __('Search name/SKU/barcode...') }}"
            class="border rounded px-3 py-2 w-64">
     <select name="category" class="border rounded px-3 py-2">
-        <option value="">All Categories</option>
+        <option value="">{{ __('All Categories') }}</option>
         @foreach($categories as $c)
             <option value="{{ $c }}" @selected(request('category')===$c)>{{ $c }}</option>
         @endforeach
     </select>
-    <button class="btn btn-gray">Filter</button>
+    <button class="btn btn-gray">{{ __('Filter') }}</button>
 </form>
 
 <div data-ajax-list="products">
@@ -55,12 +55,12 @@ document.getElementById('import-file-input').addEventListener('change', function
     <button type="button" class="btn btn-red" data-bulk-submit="products"
             data-action-url="{{ route('products.destroy-selected') }}"
             data-confirm-message="Disable the selected products? They'll move to the Disabled list and can be reactivated anytime.">
-        Disable Selected
+        {{ __('Disable Selected') }}
     </button>
     <button type="button" class="btn btn-red" data-bulk-all-submit
             data-action-url="{{ route('products.destroy-all') }}"
             data-confirm-message="Disable ALL products on this list? They'll move to the Disabled list and can be reactivated anytime.">
-        Disable All
+        {{ __('Disable All') }}
     </button>
 </div>
 @endif
@@ -69,24 +69,24 @@ document.getElementById('import-file-input').addEventListener('change', function
     <span data-bulk-count="products" class="text-sm text-gray-500"></span>
     <button type="button" class="btn btn-solid-green" data-bulk-submit="products"
             data-action-url="{{ route('products.reactivate-selected') }}"
-            data-confirm-message="Reactivate the selected products?">
-        Restore Selected
+            data-confirm-message="{{ __('Reactivate the selected products?') }}">
+        {{ __('Restore Selected') }}
     </button>
     <button type="button" class="btn btn-solid-green" data-bulk-all-submit
             data-action-url="{{ route('products.reactivate-all') }}"
-            data-confirm-message="Reactivate ALL disabled products on this list?">
-        Restore All
+            data-confirm-message="{{ __('Reactivate ALL disabled products on this list?') }}">
+        {{ __('Restore All') }}
     </button>
     @if(auth()->user()->role === 'admin')
     <button type="button" class="btn btn-red" data-bulk-submit="products" data-http-method="DELETE"
             data-action-url="{{ route('products.force-delete-selected') }}"
             data-confirm-message="Permanently delete the selected products? This cannot be undone. Products with sales/purchase history can't be removed this way.">
-        Permanently Delete Selected
+        {{ __('Permanently Delete Selected') }}
     </button>
     <button type="button" class="btn btn-red" data-bulk-all-submit data-http-method="DELETE"
             data-action-url="{{ route('products.force-delete-all') }}"
             data-confirm-message="Permanently delete ALL disabled products on this list? This cannot be undone. Products with sales/purchase history can't be removed this way.">
-        Permanently Delete All
+        {{ __('Permanently Delete All') }}
     </button>
     @endif
 </div>
@@ -96,8 +96,8 @@ document.getElementById('import-file-input').addEventListener('change', function
     <thead class="bg-gray-50 text-left">
         <tr>
             <th class="p-3"><input type="checkbox" data-bulk-select-all="products"></th>
-            <th class="p-3">Name</th><th class="p-3">SKU / Barcode</th><th class="p-3">Category</th>
-            <th class="p-3">Stock</th><th class="p-3">Sale Price</th><th class="p-3">Actions</th>
+            <th class="p-3">{{ __('Name') }}</th><th class="p-3">{{ __('SKU / Barcode') }}</th><th class="p-3">{{ __('Category') }}</th>
+            <th class="p-3">{{ __('Stock') }}</th><th class="p-3">{{ __('Sale Price') }}</th><th class="p-3">{{ __('Actions') }}</th>
         </tr>
     </thead>
     <tbody>
@@ -113,21 +113,21 @@ document.getElementById('import-file-input').addEventListener('change', function
                 @if($showInactive)
                     <form method="POST" action="{{ route('products.reactivate', $p) }}" class="inline">
                         @csrf
-                        <button class="btn btn-solid-green">Reactivate</button>
+                        <button class="btn btn-solid-green">{{ __('Reactivate') }}</button>
                     </form>
                     @if(auth()->user()->role === 'admin')
-                    <form method="POST" action="{{ route('products.force-delete-one', $p) }}" class="inline confirm-submit" data-confirm-message="Permanently delete this product? This cannot be undone, and only works if it has no sales/purchase history.">
+                    <form method="POST" action="{{ route('products.force-delete-one', $p) }}" class="inline confirm-submit" data-confirm-message="{{ __('Permanently delete this product? This cannot be undone, and only works if it has no sales/purchase history.') }}">
                         @csrf @method('DELETE')
-                        <button class="btn btn-red">Delete Forever</button>
+                        <button class="btn btn-red">{{ __('Delete Forever') }}</button>
                     </form>
                     @endif
                 @else
-                    <a href="{{ route('products.edit', $p) }}" class="btn btn-blue">Edit</a>
-                    <a href="{{ route('products.price-history', $p) }}" class="btn btn-gray">History</a>
+                    <a href="{{ route('products.edit', $p) }}" class="btn btn-blue">{{ __('Edit') }}</a>
+                    <a href="{{ route('products.price-history', $p) }}" class="btn btn-gray">{{ __('History') }}</a>
                     @if(auth()->user()->role === 'admin')
-                    <form method="POST" action="{{ route('products.destroy', $p) }}" class="inline confirm-submit" data-confirm-message="Disable this product? It will be hidden from Products and Billing, but past sales stay intact — you can reactivate it anytime.">
+                    <form method="POST" action="{{ route('products.destroy', $p) }}" class="inline confirm-submit" data-confirm-message="{{ __('Disable this product? It will be hidden from Products and Billing, but past sales stay intact — you can reactivate it anytime.') }}">
                         @csrf @method('DELETE')
-                        <button class="btn btn-red">Disable</button>
+                        <button class="btn btn-red">{{ __('Disable') }}</button>
                     </form>
                     @endif
                 @endif

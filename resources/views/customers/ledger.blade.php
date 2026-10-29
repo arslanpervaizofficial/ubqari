@@ -1,28 +1,32 @@
 @extends('layouts.app')
-@section('title', 'Customer Ledger')
+@section('title', __('Customer Ledger'))
 @section('content')
 <div class="flex flex-wrap items-start justify-between gap-3 mb-1">
-    <h1 class="text-2xl font-bold">{{ $customer->name }} — Ledger</h1>
+    <h1 class="text-2xl font-bold">{{ $customer->name }} {{ __('— Ledger') }}</h1>
     <div class="flex gap-2 print:hidden">
         <button type="button" id="ledger-export-pdf-btn" class="btn btn-gray">
             <svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M13 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V9l-6-6z"/>
                 <path stroke-linecap="round" stroke-linejoin="round" d="M13 3v5a1 1 0 001 1h5"/>
             </svg>
-            Export PDF
+            {{ __('Export PDF') }}
         </button>
         <button type="button" id="ledger-whatsapp-btn" class="btn btn-solid-green">
             <svg class="w-4 h-4 inline -mt-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.149-.15.35-.372.523-.558.174-.185.223-.309.35-.526.148-.236.075-.443-.024-.606-.075-.15-.673-1.62-.923-2.228-.24-.57-.483-.5-.673-.51h-.573c-.198 0-.52.074-.792.372-.273.297-1.04 1.017-1.04 2.479 0 1.462 1.065 2.875 1.213 3.075.149.198 2.06 3.16 5.058 4.437 2.996 1.276 2.996.85 3.535.795.537-.05 1.758-.716 2.006-1.412.248-.694.248-1.29.174-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.87.505 3.62 1.386 5.126L2 22l4.994-1.31A9.955 9.955 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2zm0 18.15a8.14 8.14 0 01-4.16-1.14l-.298-.177-3.098.813.827-3.023-.194-.31A8.15 8.15 0 013.85 12c0-4.5 3.65-8.15 8.15-8.15S20.15 7.5 20.15 12 16.5 20.15 12 20.15z"/></svg>
-            Share on WhatsApp
+            {{ __('Share on WhatsApp') }}
         </button>
+        <form method="POST" action="{{ route('customers.sms-reminder', $customer) }}" class="inline">
+            @csrf
+            <button type="submit" class="btn btn-solid-blue">{{ __('Send SMS reminder') }}</button>
+        </form>
     </div>
 </div>
 
 <div id="ledger-print-area">
     <div class="hidden ledger-print-only mb-3">
         <div class="text-lg font-bold">{{ \App\Models\AppSetting::current()->print_title }}</div>
-        <div class="text-sm text-gray-500">Ledger Statement — {{ $customer->name }} ({{ $customer->phone }})</div>
-        <div class="text-xs text-gray-400">Generated: {{ now()->format('Y-m-d H:i') }}</div>
+        <div class="text-sm text-gray-500">{{ __('Ledger Statement —') }} {{ $customer->name }} ({{ $customer->phone }})</div>
+        <div class="text-xs text-gray-400">{{ __('Generated') }}: {{ now()->format('Y-m-d H:i') }}</div>
     </div>
 
     <p class="text-gray-600 mb-4">
@@ -31,28 +35,28 @@
         @elseif($customer->credit_balance < 0)
             Advance/credit owed TO customer: <span class="font-bold text-blue-700">{{ number_format(abs($customer->credit_balance), 2) }}</span>
         @else
-            Balance: <span class="font-bold">0.00</span> — settled up
+            Balance: <span class="font-bold">0.00</span> {{ __('— settled up') }}
         @endif
     </p>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6">
         <div class="lg:col-span-2 bg-white rounded-xl shadow-sm p-5">
-            <h2 class="font-semibold text-gray-700 mb-3">Monthly Orders — Last 12 Months</h2>
+            <h2 class="font-semibold text-gray-700 mb-3">{{ __('Monthly Orders — Last 12 Months') }}</h2>
             @if($monthlyOrders->sum('count'))
                 <canvas id="monthlyOrdersChart" height="90"></canvas>
             @else
-                <p class="text-gray-400 text-sm">No completed orders yet for this customer.</p>
+                <p class="text-gray-400 text-sm">{{ __('No completed orders yet for this customer.') }}</p>
             @endif
         </div>
         <div class="bg-white rounded-xl shadow-sm p-5">
             <h2 class="font-semibold text-gray-700 mb-3 flex items-center gap-2">
                 <svg class="w-5 h-5 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"/></svg>
-                Top Products (This Customer)
+                {{ __('Top Products (This Customer)') }}
             </h2>
             @if($topProducts->count())
                 <canvas id="customerTopProductsChart" height="140"></canvas>
             @else
-                <p class="text-gray-400 text-sm">No completed orders yet.</p>
+                <p class="text-gray-400 text-sm">{{ __('No completed orders yet.') }}</p>
             @endif
         </div>
     </div>
@@ -60,28 +64,28 @@
     <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
         <h2 class="font-semibold text-gray-700 mb-3 flex items-center gap-2">
             <svg class="w-5 h-5 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            Products Not Ordered In A While
+            {{ __('Products Not Ordered In A While') }}
         </h2>
         @if($lapsedProducts->count())
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                 @foreach($lapsedProducts as $row)
                     <div class="text-sm rounded-lg px-3 py-2 flex justify-between items-center {{ $row->days_since >= 60 ? 'bg-red-50' : ($row->days_since >= 30 ? 'bg-yellow-50' : 'bg-gray-50') }}">
                         <span>{{ $row->product->name ?? '—' }}</span>
-                        <span class="font-semibold {{ $row->days_since >= 60 ? 'text-red-600' : ($row->days_since >= 30 ? 'text-yellow-700' : 'text-gray-500') }}">{{ $row->days_since }}d ago</span>
+                        <span class="font-semibold {{ $row->days_since >= 60 ? 'text-red-600' : ($row->days_since >= 30 ? 'text-yellow-700' : 'text-gray-500') }}">{{ $row->days_since }}{{ __('d ago') }}</span>
                     </div>
                 @endforeach
             </div>
         @else
-            <p class="text-gray-400 text-sm">This customer has no order history yet.</p>
+            <p class="text-gray-400 text-sm">{{ __('This customer has no order history yet.') }}</p>
         @endif
     </div>
 
     <!-- Orders — paginated version for on-screen browsing (excluded from export/print) -->
     <div class="ledger-screen-only" data-ajax-list="ledger">
     <div class="bg-white rounded-xl shadow-sm overflow-x-auto mb-6">
-    <h2 class="font-semibold p-4 border-b">Order History</h2>
+    <h2 class="font-semibold p-4 border-b">{{ __('Order History') }}</h2>
     <table class="w-full text-sm">
-        <thead class="bg-gray-50 text-left"><tr><th class="p-3">Order #</th><th class="p-3">Date</th><th class="p-3">Total</th><th class="p-3">Paid</th><th class="p-3">Due</th><th class="p-3">Status</th></tr></thead>
+        <thead class="bg-gray-50 text-left"><tr><th class="p-3">{{ __('Order #') }}</th><th class="p-3">{{ __('Date') }}</th><th class="p-3">{{ __('Total') }}</th><th class="p-3">{{ __('Paid') }}</th><th class="p-3">{{ __('Due') }}</th><th class="p-3">{{ __('Status') }}</th></tr></thead>
         <tbody>
         @forelse($orders as $o)
             <tr class="border-t">
@@ -90,11 +94,11 @@
                 <td class="p-3">{{ number_format($o->total,2) }}</td>
                 <td class="p-3">{{ number_format($o->paid_amount,2) }}</td>
                 @php($rowDue = round($o->total - $o->paid_amount, 2))
-                <td class="p-3 {{ $rowDue < 0 ? 'text-blue-700 font-semibold' : '' }}">{{ number_format($rowDue,2) }}@if($rowDue < 0) <span class="text-xs">(advance)</span>@endif</td>
+                <td class="p-3 {{ $rowDue < 0 ? 'text-blue-700 font-semibold' : '' }}">{{ number_format($rowDue,2) }}@if($rowDue < 0) <span class="text-xs">{{ __('(advance)') }}</span>@endif</td>
                 <td class="p-3">{{ $o->status }}</td>
             </tr>
         @empty
-            <tr><td class="p-3 text-gray-400" colspan="6">No orders yet.</td></tr>
+            <tr><td class="p-3 text-gray-400" colspan="6">{{ __('No orders yet.') }}</td></tr>
         @endforelse
         </tbody>
     </table>
@@ -104,9 +108,9 @@
 
     <!-- Orders — full, unpaginated version, ONLY for export/print (kept hidden otherwise) -->
     <div class="hidden ledger-print-only bg-white rounded-xl shadow-sm overflow-x-auto mb-6">
-    <h2 class="font-semibold p-4 border-b">Order History (Complete)</h2>
+    <h2 class="font-semibold p-4 border-b">{{ __('Order History (Complete)') }}</h2>
     <table class="w-full text-sm">
-        <thead class="bg-gray-50 text-left"><tr><th class="p-3">Order #</th><th class="p-3">Date</th><th class="p-3">Total</th><th class="p-3">Paid</th><th class="p-3">Due</th><th class="p-3">Status</th></tr></thead>
+        <thead class="bg-gray-50 text-left"><tr><th class="p-3">{{ __('Order #') }}</th><th class="p-3">{{ __('Date') }}</th><th class="p-3">{{ __('Total') }}</th><th class="p-3">{{ __('Paid') }}</th><th class="p-3">{{ __('Due') }}</th><th class="p-3">{{ __('Status') }}</th></tr></thead>
         <tbody>
         @forelse($allOrders as $o)
             <tr class="border-t">
@@ -115,11 +119,11 @@
                 <td class="p-3">{{ number_format($o->total,2) }}</td>
                 <td class="p-3">{{ number_format($o->paid_amount,2) }}</td>
                 @php($rowDue = round($o->total - $o->paid_amount, 2))
-                <td class="p-3 {{ $rowDue < 0 ? 'text-blue-700 font-semibold' : '' }}">{{ number_format($rowDue,2) }}@if($rowDue < 0) <span class="text-xs">(advance)</span>@endif</td>
+                <td class="p-3 {{ $rowDue < 0 ? 'text-blue-700 font-semibold' : '' }}">{{ number_format($rowDue,2) }}@if($rowDue < 0) <span class="text-xs">{{ __('(advance)') }}</span>@endif</td>
                 <td class="p-3">{{ $o->status }}</td>
             </tr>
         @empty
-            <tr><td class="p-3 text-gray-400" colspan="6">No orders yet.</td></tr>
+            <tr><td class="p-3 text-gray-400" colspan="6">{{ __('No orders yet.') }}</td></tr>
         @endforelse
         </tbody>
     </table>
@@ -128,18 +132,18 @@
     @if($payments->count())
     <!-- Credit/Debit — on-screen version with Edit/Delete (excluded from export/print) -->
     <div class="bg-white rounded-xl shadow-sm overflow-x-auto mb-6 ledger-screen-only">
-    <h2 class="font-semibold p-4 border-b">Credit / Debit History</h2>
+    <h2 class="font-semibold p-4 border-b">{{ __('Credit / Debit History') }}</h2>
     <table class="w-full text-sm">
-        <thead class="bg-gray-50 text-left"><tr><th class="p-3">Date</th><th class="p-3">Type</th><th class="p-3">Amount</th><th class="p-3">Note</th><th class="p-3">Recorded By</th><th class="p-3">Actions</th></tr></thead>
+        <thead class="bg-gray-50 text-left"><tr><th class="p-3">{{ __('Date') }}</th><th class="p-3">{{ __('Type') }}</th><th class="p-3">{{ __('Amount') }}</th><th class="p-3">{{ __('Note') }}</th><th class="p-3">{{ __('Recorded By') }}</th><th class="p-3">{{ __('Actions') }}</th></tr></thead>
         <tbody>
         @foreach($payments as $pmt)
             <tr class="border-t">
                 <td class="p-3">{{ $pmt->created_at->format('Y-m-d H:i') }}</td>
                 <td class="p-3">
                     @if($pmt->type === 'credit')
-                        <span class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">Credit</span>
+                        <span class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">{{ __('Credit') }}</span>
                     @else
-                        <span class="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full">Debit</span>
+                        <span class="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full">{{ __('Debit') }}</span>
                     @endif
                 </td>
                 <td class="p-3 font-semibold {{ $pmt->type === 'credit' ? 'text-green-700' : 'text-red-700' }}">
@@ -151,12 +155,12 @@
                     <button type="button" class="btn btn-blue open-edit-payment-modal"
                             data-action="{{ route('customers.update-payment', [$customer, $pmt]) }}"
                             data-type="{{ $pmt->type }}" data-amount="{{ $pmt->amount }}" data-note="{{ $pmt->note }}">
-                        Edit
+                        {{ __('Edit') }}
                     </button>
                     @if(auth()->user()->role === 'admin')
                     <form method="POST" action="{{ route('customers.destroy-payment', [$customer, $pmt]) }}" class="inline confirm-submit" data-confirm-message="Move this ledger entry to Trash? The customer's balance will be adjusted back. You can restore it anytime from Trash.">
                         @csrf @method('DELETE')
-                        <button class="btn btn-red">Delete</button>
+                        <button class="btn btn-red">{{ __('Delete') }}</button>
                     </form>
                     @endif
                 </td>
@@ -168,14 +172,14 @@
 
     <!-- Credit/Debit — clean read-only version, ONLY for export/print -->
     <div class="hidden ledger-print-only bg-white rounded-xl shadow-sm overflow-x-auto mb-6">
-    <h2 class="font-semibold p-4 border-b">Credit / Debit History</h2>
+    <h2 class="font-semibold p-4 border-b">{{ __('Credit / Debit History') }}</h2>
     <table class="w-full text-sm">
-        <thead class="bg-gray-50 text-left"><tr><th class="p-3">Date</th><th class="p-3">Type</th><th class="p-3">Amount</th><th class="p-3">Note</th></tr></thead>
+        <thead class="bg-gray-50 text-left"><tr><th class="p-3">{{ __('Date') }}</th><th class="p-3">{{ __('Type') }}</th><th class="p-3">{{ __('Amount') }}</th><th class="p-3">{{ __('Note') }}</th></tr></thead>
         <tbody>
         @foreach($payments as $pmt)
             <tr class="border-t">
                 <td class="p-3">{{ $pmt->created_at->format('Y-m-d H:i') }}</td>
-                <td class="p-3">{{ $pmt->type === 'credit' ? 'Credit' : 'Debit' }}</td>
+                <td class="p-3">{{ $pmt->type === 'credit' ? __('Credit') : __('Debit') }}</td>
                 <td class="p-3 font-semibold">{{ $pmt->type === 'credit' ? '-' : '+' }}{{ number_format($pmt->amount, 2) }}</td>
                 <td class="p-3">{{ $pmt->note }}</td>
             </tr>
@@ -187,32 +191,32 @@
 
     <!-- Statement summary — always shown, at the very end -->
     <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 {{ $customer->credit_balance > 0 ? 'border-red-500' : ($customer->credit_balance < 0 ? 'border-blue-500' : 'border-green-500') }}">
-        <h2 class="font-semibold text-gray-700 mb-3">Statement Summary</h2>
+        <h2 class="font-semibold text-gray-700 mb-3">{{ __('Statement Summary') }}</h2>
         @php($L = $ledgerSummary)
         <table class="w-full text-sm mb-3">
             <thead>
                 <tr class="text-gray-500 text-right">
                     <th class="py-1 text-left font-normal"></th>
-                    <th class="py-1 font-normal">Orders</th>
-                    <th class="py-1 font-normal">Credit / Debit entries</th>
-                    <th class="py-1 font-semibold text-gray-700">Total</th>
+                    <th class="py-1 font-normal">{{ __('Orders') }}</th>
+                    <th class="py-1 font-normal">{{ __('Credit / Debit entries') }}</th>
+                    <th class="py-1 font-semibold text-gray-700">{{ __('Total') }}</th>
                 </tr>
             </thead>
             <tbody class="text-right">
                 <tr class="border-t">
-                    <td class="py-2 text-left text-gray-600">Billed / Debits</td>
+                    <td class="py-2 text-left text-gray-600">{{ __('Billed / Debits') }}</td>
                     <td class="py-2">{{ number_format($L['total_billed'], 2) }}</td>
                     <td class="py-2">{{ number_format($L['debits'], 2) }}</td>
                     <td class="py-2 font-semibold">{{ number_format($L['total_charges'], 2) }}</td>
                 </tr>
                 <tr class="border-t">
-                    <td class="py-2 text-left text-gray-600">Paid / Credits</td>
+                    <td class="py-2 text-left text-gray-600">{{ __('Paid / Credits') }}</td>
                     <td class="py-2 text-green-700">{{ number_format($L['order_paid'], 2) }}</td>
                     <td class="py-2 text-green-700">{{ number_format($L['credits'], 2) }}</td>
                     <td class="py-2 font-semibold text-green-700">{{ number_format($L['total_paid'], 2) }}</td>
                 </tr>
                 <tr class="border-t">
-                    <td class="py-2 text-left text-gray-600">Balance</td>
+                    <td class="py-2 text-left text-gray-600">{{ __('Balance') }}</td>
                     <td class="py-2">{{ number_format($L['order_due'], 2) }}</td>
                     <td class="py-2">{{ number_format($L['debits'] - $L['credits'], 2) }}</td>
                     <td class="py-2 font-semibold">{{ number_format($L['balance'], 2) }}</td>
@@ -221,62 +225,62 @@
         </table>
         <div class="border-t pt-3 text-lg">
             @if($customer->credit_balance > 0)
-                <span class="font-bold">Total Balance Due: <span class="text-red-600">{{ number_format($customer->credit_balance, 2) }}</span></span>
+                <span class="font-bold">{{ __('Total Balance Due') }}: <span class="text-red-600">{{ number_format($customer->credit_balance, 2) }}</span></span>
             @elseif($customer->credit_balance < 0)
-                <span class="font-bold">Total Advance/Credit: <span class="text-blue-700">{{ number_format(abs($customer->credit_balance), 2) }}</span></span>
+                <span class="font-bold">{{ __('Total Advance/Credit') }}: <span class="text-blue-700">{{ number_format(abs($customer->credit_balance), 2) }}</span></span>
             @else
-                <span class="font-bold">Total Balance: <span class="text-green-700">0.00 — Settled Up</span></span>
+                <span class="font-bold">{{ __('Total Balance') }}: <span class="text-green-700">{{ __('0.00 — Settled Up') }}</span></span>
             @endif
         </div>
     </div>
 </div>
 
 <div class="bg-white rounded-xl shadow-sm p-5 mb-6 mt-6 print:hidden">
-    <h2 class="font-semibold mb-3">Record Credit/Debit (no order involved — payment received, a return, or a manual adjustment)</h2>
+    <h2 class="font-semibold mb-3">{{ __('Record Credit/Debit (no order involved — payment received, a return, or a manual adjustment)') }}</h2>
     <form method="POST" action="{{ route('customers.record-payment', $customer) }}" novalidate class="flex flex-wrap items-end gap-3">
         @csrf
         <div class="flex gap-2">
             <label class="border rounded-lg px-3 py-2 flex items-center gap-2 cursor-pointer has-[:checked]:border-green-500 has-[:checked]:bg-green-50 text-sm">
-                <input type="radio" name="type" value="credit" checked> Credit
+                <input type="radio" name="type" value="credit" checked> {{ __('Credit') }}
             </label>
             <label class="border rounded-lg px-3 py-2 flex items-center gap-2 cursor-pointer has-[:checked]:border-red-500 has-[:checked]:bg-red-50 text-sm">
-                <input type="radio" name="type" value="debit"> Debit
+                <input type="radio" name="type" value="debit"> {{ __('Debit') }}
             </label>
         </div>
         <div>
-            <label class="block text-sm text-gray-600 mb-1">Amount</label>
+            <label class="block text-sm text-gray-600 mb-1">{{ __('Amount') }}</label>
             <input type="number" step="0.01" min="0.01" name="amount" required data-label="Amount" class="border rounded px-3 py-2 w-40">
             @error('amount') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
         </div>
         <div class="flex-1 min-w-[200px]">
-            <label class="block text-sm text-gray-600 mb-1">Note (optional)</label>
-            <input name="note" placeholder="e.g. Cash received / Returned 2x Aag Shifa" class="border rounded px-3 py-2 w-full">
+            <label class="block text-sm text-gray-600 mb-1">{{ __('Note (optional)') }}</label>
+            <input name="note" placeholder="{{ __('e.g. Cash received / Returned 2x Aag Shifa') }}" class="border rounded px-3 py-2 w-full">
         </div>
-        <button class="btn btn-solid-green">Save</button>
+        <button class="btn btn-solid-green">{{ __('Save') }}</button>
     </form>
 </div>
 
 <!-- Edit Credit/Debit modal -->
 <div id="edit-payment-modal-overlay" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 print:hidden">
     <div class="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
-        <h3 class="font-bold mb-4">Edit Ledger Entry</h3>
+        <h3 class="font-bold mb-4">{{ __('Edit Ledger Entry') }}</h3>
         <form id="edit-payment-modal-form" method="POST" novalidate>
             @csrf @method('PATCH')
             <div class="flex gap-2 mb-3">
                 <label class="flex-1 border rounded-lg px-3 py-2 flex items-center gap-2 cursor-pointer has-[:checked]:border-green-500 has-[:checked]:bg-green-50">
-                    <input type="radio" name="type" value="credit" id="edit-payment-type-credit"> Credit
+                    <input type="radio" name="type" value="credit" id="edit-payment-type-credit"> {{ __('Credit') }}
                 </label>
                 <label class="flex-1 border rounded-lg px-3 py-2 flex items-center gap-2 cursor-pointer has-[:checked]:border-red-500 has-[:checked]:bg-red-50">
-                    <input type="radio" name="type" value="debit" id="edit-payment-type-debit"> Debit
+                    <input type="radio" name="type" value="debit" id="edit-payment-type-debit"> {{ __('Debit') }}
                 </label>
             </div>
-            <label class="block text-sm text-gray-600 mb-1">Amount</label>
+            <label class="block text-sm text-gray-600 mb-1">{{ __('Amount') }}</label>
             <input type="number" step="0.01" min="0.01" name="amount" id="edit-payment-amount" required data-label="Amount" class="w-full border rounded px-3 py-2 mb-3">
-            <label class="block text-sm text-gray-600 mb-1">Note (optional)</label>
+            <label class="block text-sm text-gray-600 mb-1">{{ __('Note (optional)') }}</label>
             <input name="note" id="edit-payment-note" class="w-full border rounded px-3 py-2 mb-4">
             <div class="flex justify-end gap-2">
-                <button type="button" id="edit-payment-modal-cancel" class="btn btn-gray">Cancel</button>
-                <button class="btn btn-solid-green">Save</button>
+                <button type="button" id="edit-payment-modal-cancel" class="btn btn-gray">{{ __('Cancel') }}</button>
+                <button class="btn btn-solid-green">{{ __('Save') }}</button>
             </div>
         </form>
     </div>

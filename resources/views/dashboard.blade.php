@@ -1,13 +1,13 @@
 @extends('layouts.app')
-@section('title', 'Dashboard')
+@section('title', __('Dashboard'))
 @section('content')
-<h1 class="text-2xl font-bold mb-6 text-gray-800">Dashboard</h1>
+<h1 class="text-2xl font-bold mb-6 text-gray-800">{{ __('Dashboard') }}</h1>
 
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-6">
     <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-blue-500">
         <div class="flex items-center justify-between">
             <div>
-                <div class="text-gray-500 text-xs uppercase tracking-wide font-semibold">Today's Sales</div>
+                <div class="text-gray-500 text-xs uppercase tracking-wide font-semibold">{{ __('Today\'s Sales') }}</div>
                 <div class="text-2xl font-bold text-gray-800 mt-1">Rs {{ number_format($todaySales, 0) }}</div>
             </div>
             <div class="bg-blue-100 text-blue-600 rounded-full w-14 h-14 flex items-center justify-center flex-shrink-0">
@@ -18,7 +18,7 @@
     <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-purple-500">
         <div class="flex items-center justify-between">
             <div>
-                <div class="text-gray-500 text-xs uppercase tracking-wide font-semibold">This Month</div>
+                <div class="text-gray-500 text-xs uppercase tracking-wide font-semibold">{{ __('This Month') }}</div>
                 <div class="text-2xl font-bold text-gray-800 mt-1">Rs {{ number_format($monthSales, 0) }}</div>
             </div>
             <div class="bg-purple-100 text-purple-600 rounded-full w-14 h-14 flex items-center justify-center flex-shrink-0">
@@ -29,41 +29,41 @@
     <a href="{{ route('pos.held-index') }}" class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-yellow-500 hover:shadow-md transition cursor-pointer">
         <div class="flex items-center justify-between">
             <div>
-                <div class="text-gray-500 text-xs uppercase tracking-wide font-semibold">Held Orders</div>
+                <div class="text-gray-500 text-xs uppercase tracking-wide font-semibold">{{ __('Held Orders') }}</div>
                 <div class="text-2xl font-bold text-gray-800 mt-1">{{ $heldOrdersCount }}</div>
             </div>
             <div class="bg-yellow-100 text-yellow-600 rounded-full w-14 h-14 flex items-center justify-center flex-shrink-0">
                 <svg class="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6M12 3a9 9 0 100 18 9 9 0 000-18z"/></svg>
             </div>
         </div>
-        @if($heldOrdersCount)<div class="text-xs text-yellow-600 mt-2">Click to view held orders →</div>@endif
+        @if($heldOrdersCount)<div class="text-xs text-yellow-600 mt-2">{{ __('Click to view held orders →') }}</div>@endif
     </a>
     <a href="#" id="oos-card-trigger" class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-red-500 hover:shadow-md transition cursor-pointer">
         <div class="flex items-center justify-between">
             <div>
-                <div class="text-gray-500 text-xs uppercase tracking-wide font-semibold">Out of Stock</div>
+                <div class="text-gray-500 text-xs uppercase tracking-wide font-semibold">{{ __('Out of Stock') }}</div>
                 <div class="text-2xl font-bold text-gray-800 mt-1">{{ $outOfStock->count() }}</div>
             </div>
             <div class="bg-red-100 text-red-600 rounded-full w-14 h-14 flex items-center justify-center flex-shrink-0">
                 <svg class="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg>
             </div>
         </div>
-        @if($outOfStock->count())<div class="text-xs text-red-500 mt-2">Click to create a restock order →</div>@endif
+        @if($outOfStock->count())<div class="text-xs text-red-500 mt-2">{{ __('Click to create a restock order →') }}</div>@endif
     </a>
 </div>
 
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6">
     <div class="lg:col-span-2 bg-white rounded-xl shadow-sm p-5">
-        <h2 class="font-semibold text-gray-700 mb-3">Sales — Last 7 Days</h2>
+        <h2 class="font-semibold text-gray-700 mb-3">{{ __('Sales — Last 7 Days') }}</h2>
         <canvas id="salesChart" height="90"></canvas>
     </div>
     <div class="bg-white rounded-xl shadow-sm p-5">
-        <h2 class="font-semibold text-gray-700 mb-3">Overview</h2>
+        <h2 class="font-semibold text-gray-700 mb-3">{{ __('Overview') }}</h2>
         <div class="space-y-3 text-sm">
-            <div class="flex justify-between"><span class="text-gray-500">Total Products</span><span class="font-semibold">{{ $totalProducts }}</span></div>
-            <div class="flex justify-between"><span class="text-gray-500">Total Customers</span><span class="font-semibold">{{ $totalCustomers }}</span></div>
-            <div class="flex justify-between"><span class="text-gray-500">Low Stock Items</span><span class="font-semibold text-yellow-600">{{ $lowStock->count() }}</span></div>
-            <div class="flex justify-between"><span class="text-gray-500">Out of Stock</span><span class="font-semibold text-red-600">{{ $outOfStock->count() }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">{{ __('Total Products') }}</span><span class="font-semibold">{{ $totalProducts }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">{{ __('Total Customers') }}</span><span class="font-semibold">{{ $totalCustomers }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">{{ __('Low Stock Items') }}</span><span class="font-semibold text-yellow-600">{{ $lowStock->count() }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">{{ __('Out of Stock') }}</span><span class="font-semibold text-red-600">{{ $outOfStock->count() }}</span></div>
         </div>
     </div>
 </div>
@@ -72,7 +72,7 @@
     <div class="bg-white rounded-xl shadow-sm p-5">
         <h2 class="font-semibold text-gray-700 mb-3 flex items-center gap-2">
             <svg class="w-5 h-5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
-            Top Parties (Customers)
+            {{ __('Top Parties (Customers)') }}
         </h2>
         @if($topParties->count())
             <div class="space-y-2">
@@ -87,18 +87,18 @@
                 @endforeach
             </div>
         @else
-            <p class="text-gray-400 text-sm">No completed sales yet.</p>
+            <p class="text-gray-400 text-sm">{{ __('No completed sales yet.') }}</p>
         @endif
     </div>
     <div class="bg-white rounded-xl shadow-sm p-5">
         <h2 class="font-semibold text-gray-700 mb-3 flex items-center gap-2">
             <svg class="w-5 h-5 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"/></svg>
-            Top Products
+            {{ __('Top Products') }}
         </h2>
         @if($topProducts->count())
             <canvas id="topProductsChart" height="140"></canvas>
         @else
-            <p class="text-gray-400 text-sm">No completed sales yet.</p>
+            <p class="text-gray-400 text-sm">{{ __('No completed sales yet.') }}</p>
         @endif
     </div>
 </div>
@@ -129,7 +129,7 @@
         @endforeach
     </div>
     @unless(in_array(auth()->user()->role, ['admin', 'manager']))
-        <p class="text-xs text-gray-400 mt-2">Ask an Admin or Manager to place a restock order for these.</p>
+        <p class="text-xs text-gray-400 mt-2">{{ __('Ask an Admin or Manager to place a restock order for these.') }}</p>
     @endunless
 </div>
 @endif
@@ -141,7 +141,7 @@
 @if(in_array(auth()->user()->role, ['admin', 'manager']))
 <div id="oos-modal-overlay" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6">
-        <h3 class="font-bold text-lg text-red-700 mb-1">⚠ Out of Stock</h3>
+        <h3 class="font-bold text-lg text-red-700 mb-1">{{ __('⚠ Out of Stock') }}</h3>
         <p class="text-sm text-gray-500 mb-4">{{ $outOfStock->count() }} product(s) are at zero stock. Set quantities below and create one restock order for all of them.</p>
         <form method="GET" action="{{ route('purchase-orders.create') }}">
             <div class="space-y-2 max-h-72 overflow-y-auto mb-4">
@@ -158,14 +158,41 @@
                 @endforeach
             </div>
             <div class="flex justify-between">
-                <button type="button" id="oos-modal-dismiss" class="btn btn-gray">Dismiss for today</button>
-                <button class="btn btn-solid-blue">Create Purchase Order →</button>
+                <button type="button" id="oos-modal-dismiss" class="btn btn-gray">{{ __('Dismiss for today') }}</button>
+                <button class="btn btn-solid-blue">{{ __('Create Purchase Order →') }}</button>
             </div>
         </form>
     </div>
 </div>
 @endif
 
+@if(($expiringBatches ?? collect())->count())
+<div id="expiring-soon" class="bg-white rounded-xl shadow-sm p-5 mb-6 border-l-4 border-orange-400">
+    <h2 class="font-semibold mb-3 text-orange-700">{{ __('Expiring soon (next 30 days)') }}</h2>
+    <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+        <thead class="text-left text-gray-500">
+            <tr>
+                <th class="py-2 pr-4">{{ __('Product') }}</th>
+                <th class="px-4">{{ __('Batch No') }}</th>
+                <th class="px-4">{{ __('Expiry Date') }}</th>
+                <th class="px-4">{{ __('Remaining') }}</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach($expiringBatches as $batch)
+            <tr class="border-t">
+                <td class="py-2 pr-4 font-medium">{{ $batch->product->name ?? '—' }}</td>
+                <td class="px-4">{{ $batch->batch_no }}</td>
+                <td class="px-4">{{ $batch->expiry_date ? $batch->expiry_date->format('Y-m-d') : '—' }}</td>
+                <td class="px-4 font-semibold">{{ $batch->remaining_quantity }} {{ $batch->product->unit ?? '' }}</td>
+            </tr>
+        @endforeach
+        </tbody>
+    </table>
+    </div>
+</div>
+@endif
 <script>
 function openOosModal() { document.getElementById('oos-modal-overlay')?.classList.remove('hidden'); }
 document.getElementById('oos-card-trigger')?.addEventListener('click', function (e) { e.preventDefault(); openOosModal(); });

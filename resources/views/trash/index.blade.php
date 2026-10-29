@@ -1,8 +1,8 @@
 @extends('layouts.app')
-@section('title', 'Trash')
+@section('title', __('Trash'))
 @section('content')
-<h1 class="text-2xl font-bold mb-1">Trash</h1>
-<p class="text-sm text-gray-500 mb-4">Anything deleted from Customers, Suppliers, Orders, Purchase Orders, Stock Returns{{ auth()->user()->role === 'admin' ? ', or Users' : '' }} ends up here first. Restore it, or permanently delete it — permanent deletion can't be undone.</p>
+<h1 class="text-2xl font-bold mb-1">{{ __('Trash') }}</h1>
+<p class="text-sm text-gray-500 mb-4">{{ __('Anything deleted from Customers, Suppliers, Orders, Purchase Orders, Stock Returns') }}{{ auth()->user()->role === 'admin' ? __(', or Users') : '' }} {{ __('ends up here first. Restore it, or permanently delete it — permanent deletion can\'t be undone.') }}</p>
 
 <div class="flex gap-2 mb-4 flex-wrap">
     @foreach($types as $slug => $t)
@@ -15,34 +15,34 @@
 @foreach($types as $slug => $t)
 <div class="trash-tab-panel {{ $loop->first ? '' : 'hidden' }}" data-trash-panel="{{ $slug }}">
     @if($trashed[$slug]->isEmpty())
-        <div class="bg-white rounded-xl shadow-sm p-6 text-gray-400 text-sm">Nothing in Trash here.</div>
+        <div class="bg-white rounded-xl shadow-sm p-6 text-gray-400 text-sm">{{ __('Nothing in Trash here.') }}</div>
     @else
         {{-- FIXED (v2, M16): only the latest 200 rows per type are listed (see TrashController::index), so when there are more, say so — and say that Restore All / Permanently Delete All still cover the rows not shown, since those actions work on the full trashed set, not this capped list. --}}
         @if(($trashedCounts[$slug] ?? $trashed[$slug]->count()) > $trashed[$slug]->count())
-            <p class="text-xs text-gray-500 mb-3">Showing the latest {{ $trashed[$slug]->count() }} of {{ $trashedCounts[$slug] }} trashed items. "Restore All" / "Permanently Delete All" below still apply to all {{ $trashedCounts[$slug] }}, including the ones not listed here.</p>
+            <p class="text-xs text-gray-500 mb-3">{{ __('Showing the latest') }} {{ $trashed[$slug]->count() }} of {{ $trashedCounts[$slug] }} {{ __('trashed items. "Restore All" / "Permanently Delete All" below still apply to all') }} {{ $trashedCounts[$slug] }}{{ __(', including the ones not listed here.') }}</p>
         @endif
         <div class="flex items-center gap-2 mb-3 flex-wrap">
             <span data-bulk-count="trash-{{ $slug }}" class="text-sm text-gray-500"></span>
             <button type="button" class="btn btn-solid-green" data-bulk-submit="trash-{{ $slug }}"
                     data-action-url="{{ route('trash.restore', $slug) }}"
-                    data-confirm-message="Restore the selected items?">
-                Restore Selected
+                    data-confirm-message="{{ __('Restore the selected items?') }}">
+                {{ __('Restore Selected') }}
             </button>
             <button type="button" class="btn btn-solid-green" data-bulk-all-submit
                     data-action-url="{{ route('trash.restore-all', $slug) }}"
                     data-confirm-message="Restore ALL items in {{ $t['label'] }} Trash?">
-                Restore All
+                {{ __('Restore All') }}
             </button>
             @if(auth()->user()->role === 'admin')
             <button type="button" class="btn btn-red" data-bulk-submit="trash-{{ $slug }}" data-http-method="DELETE"
                     data-action-url="{{ route('trash.force-delete', $slug) }}"
-                    data-confirm-message="Permanently delete the selected items? This cannot be undone.">
-                Permanently Delete Selected
+                    data-confirm-message="{{ __('Permanently delete the selected items? This cannot be undone.') }}">
+                {{ __('Permanently Delete Selected') }}
             </button>
             <button type="button" class="btn btn-red" data-bulk-all-submit data-http-method="DELETE"
                     data-action-url="{{ route('trash.force-delete-all', $slug) }}"
                     data-confirm-message="Permanently delete ALL items in {{ $t['label'] }} Trash? This cannot be undone.">
-                Permanently Delete All
+                {{ __('Permanently Delete All') }}
             </button>
             @endif
         </div>
@@ -50,9 +50,9 @@
         <table class="w-full text-sm">
             <thead class="bg-gray-50 text-left"><tr>
                 <th class="p-3"><input type="checkbox" data-bulk-select-all="trash-{{ $slug }}"></th>
-                <th class="p-3">Item</th>
-                <th class="p-3">Deleted</th>
-                <th class="p-3">Actions</th>
+                <th class="p-3">{{ __('Item') }}</th>
+                <th class="p-3">{{ __('Deleted') }}</th>
+                <th class="p-3">{{ __('Actions') }}</th>
             </tr></thead>
             <tbody>
             @foreach($trashed[$slug] as $item)
@@ -60,25 +60,25 @@
                     <td class="p-3"><input type="checkbox" data-bulk-item="trash-{{ $slug }}" value="{{ $item->id }}"></td>
                     <td class="p-3">
                         @if($slug === 'cash-parties')
-                            <span class="font-medium">{{ $item->name }}</span> <span class="text-gray-400">Balance {{ number_format($item->balance, 2) }}</span>
+                            <span class="font-medium">{{ $item->name }}</span> <span class="text-gray-400">{{ __('Balance') }} {{ number_format($item->balance, 2) }}</span>
                         @elseif($slug === 'customers' || $slug === 'suppliers')
                             <span class="font-medium">{{ $item->name }}</span> <span class="text-gray-400">{{ $item->phone }}</span>
                         @elseif($slug === 'orders')
                             <span class="font-medium">{{ $item->order_number }}</span>
                             <span class="text-gray-400">{{ $item->customer->name ?? 'Walk-in' }} — {{ number_format($item->total, 2) }}</span>
                         @elseif($slug === 'purchase-orders')
-                            <span class="font-medium">PO #{{ $item->id }}</span>
+                            <span class="font-medium">{{ __('PO #') }}{{ $item->id }}</span>
                             <span class="text-gray-400">{{ $item->supplier->name ?? '—' }} — {{ number_format($item->total, 2) }}</span>
                         @elseif($slug === 'users')
                             <span class="font-medium">{{ $item->name }}</span> <span class="text-gray-400">{{ $item->username }} · {{ $item->role }}</span>
                         @elseif($slug === 'stock-returns')
-                            <span class="font-medium">{{ $item->type === 'from_customer' ? 'From' : 'To' }} {{ $item->type === 'from_customer' ? ($item->customer->name ?? 'Walk-in') : ($item->supplier->name ?? '—') }}</span>
+                            <span class="font-medium">{{ $item->type === 'from_customer' ? __('From') : __('To') }} {{ $item->type === 'from_customer' ? ($item->customer->name ?? 'Walk-in') : ($item->supplier->name ?? '—') }}</span>
                             <span class="text-gray-400">{{ $item->product->name ?? '—' }} × {{ $item->quantity }} — {{ number_format($item->quantity * $item->unit_price, 2) }}</span>
                         @elseif($slug === 'expenses')
-                            <span class="font-medium">{{ $item->type === 'cash_in' ? 'Cash In' : 'Cash Out' }}{{ $item->category ? ' — '.$item->category : '' }}</span>
+                            <span class="font-medium">{{ $item->type === 'cash_in' ? __('Cash In') : __('Cash Out') }}{{ $item->category ? ' — '.$item->category : '' }}</span>
                             <span class="text-gray-400">{{ $item->expense_date->format('Y-m-d') }} — {{ number_format($item->amount, 2) }}</span>
                         @elseif($slug === 'customer-payments')
-                            <span class="font-medium">{{ $item->type === 'credit' ? 'Credit' : 'Debit' }} — {{ $item->customer->name ?? '—' }}</span>
+                            <span class="font-medium">{{ $item->type === 'credit' ? __('Credit') : __('Debit') }} — {{ $item->customer->name ?? '—' }}</span>
                             <span class="text-gray-400">{{ number_format($item->amount, 2) }}{{ $item->note ? ' — '.$item->note : '' }}</span>
                         @elseif($slug === 'supplier-payments')
                             <span class="font-medium">{{ ucfirst($item->type) }} — {{ $item->supplier->name ?? '—' }}</span>
@@ -90,13 +90,13 @@
                         <form method="POST" action="{{ route('trash.restore', $slug) }}" class="inline">
                             @csrf
                             <input type="hidden" name="ids[]" value="{{ $item->id }}">
-                            <button class="btn btn-solid-green">Restore</button>
+                            <button class="btn btn-solid-green">{{ __('Restore') }}</button>
                         </form>
                         @if(auth()->user()->role === 'admin')
-                        <form method="POST" action="{{ route('trash.force-delete', $slug) }}" class="inline confirm-submit" data-confirm-message="Permanently delete this? This cannot be undone.">
+                        <form method="POST" action="{{ route('trash.force-delete', $slug) }}" class="inline confirm-submit" data-confirm-message="{{ __('Permanently delete this? This cannot be undone.') }}">
                             @csrf @method('DELETE')
                             <input type="hidden" name="ids[]" value="{{ $item->id }}">
-                            <button class="btn btn-red">Permanently Delete</button>
+                            <button class="btn btn-red">{{ __('Permanently Delete') }}</button>
                         </form>
                         @endif
                     </td>

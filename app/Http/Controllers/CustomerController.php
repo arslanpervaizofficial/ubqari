@@ -2,10 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AppSetting;
 use App\Models\Customer;
 use App\Models\CustomerPayment;
 use App\Models\OrderItem;
 use App\Models\StockReturn;
+use App\Services\SmsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -383,5 +385,33 @@ class CustomerController extends Controller
         });
 
         return back()->with('status', 'Ledger entry moved to Trash and balance adjusted.');
+    }
+
+    public function sendReminder(Customer $customer)
+    {
+        $balance = (float) $customer->credit_balance;
+
+        if ($balance <= 0) {
+            return back()->with('status', "No outstanding dues for {$customer->name} — no SMS sent.");
+        }
+
+        $phone = trim((string) ($customer->phone ?? ''));
+        if ($phone === '') {
+            return back()->with('status', "No phone number on file for {$customer->name} — no SMS sent.");
+        }
+
+        $settings = AppSetting::current();
+        $shopName = $settings->print_title ?: ($settings->menu_title ?: 'Ubqari POS');
+        $message = "Assalam-o-Alaikum {$customer->name}, aapka " . number_format($balance, 2) . " ka udhar baqi hai. — {$shopName}";
+
+        $result = (new SmsService)->send($phone, $message, $customer->id, auth()->id());
+
+        if ($result['status'] === 'test') {
+            return back()->with('status', "SMS reminder logged in test mode for {$customer->name} (no real SMS sent).");
+        }
+        if ($result['ok']) {
+            return back()->with('status', "SMS reminder sent to {$customer->name}.");
+        }
+        return back()->with('status', "SMS reminder failed for {$customer->name} — see the SMS log for the provider response.");
     }
 }

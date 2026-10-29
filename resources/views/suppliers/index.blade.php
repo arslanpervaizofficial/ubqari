@@ -1,9 +1,9 @@
 @extends('layouts.app')
-@section('title', 'Suppliers')
+@section('title', __('Suppliers'))
 @section('content')
 <div class="flex justify-between items-center mb-4">
-    <h1 class="text-2xl font-bold">Suppliers</h1>
-    <a href="{{ route('suppliers.create') }}" class="btn btn-blue !bg-gray-900 !text-white">+ Add Supplier</a>
+    <h1 class="text-2xl font-bold">{{ __('Suppliers') }}</h1>
+    <a href="{{ route('suppliers.create') }}" class="btn btn-blue !bg-gray-900 !text-white">+ {{ __('Add Supplier') }}</a>
 </div>
 <div data-ajax-list="suppliers">
 @if(auth()->user()->role === 'admin')
@@ -11,13 +11,13 @@
     <span data-bulk-count="suppliers" class="text-sm text-gray-500"></span>
     <button type="button" class="btn btn-red" data-bulk-submit="suppliers"
             data-action-url="{{ route('suppliers.destroy-selected') }}"
-            data-confirm-message="Move the selected suppliers to Trash?">
-        Delete Selected
+            data-confirm-message="{{ __('Move the selected suppliers to Trash?') }}">
+        {{ __('Delete Selected') }}
     </button>
     <button type="button" class="btn btn-red" data-bulk-all-submit
             data-action-url="{{ route('suppliers.destroy-all') }}"
-            data-confirm-message="Move ALL suppliers on this list to Trash?">
-        Delete All
+            data-confirm-message="{{ __('Move ALL suppliers on this list to Trash?') }}">
+        {{ __('Delete All') }}
     </button>
 </div>
 @endif
@@ -25,7 +25,7 @@
 <table class="w-full text-sm">
     <thead class="bg-gray-50 text-left"><tr>
         @if(auth()->user()->role === 'admin')<th class="p-3"><input type="checkbox" data-bulk-select-all="suppliers"></th>@endif
-        <th class="p-3"></th><th class="p-3">Name</th><th class="p-3">Phone</th><th class="p-3">Email</th><th class="p-3">Received PO Total</th><th class="p-3">Due (balance)</th><th class="p-3">Status</th><th class="p-3">Actions</th>
+        <th class="p-3"></th><th class="p-3">{{ __('Name') }}</th><th class="p-3">{{ __('Phone') }}</th><th class="p-3">{{ __('Email') }}</th><th class="p-3">{{ __('Received PO Total') }}</th><th class="p-3">{{ __('Due (balance)') }}</th><th class="p-3">{{ __('Status') }}</th><th class="p-3">{{ __('Actions') }}</th>
     </tr></thead>
     <tbody>
     @foreach($suppliers as $s)
@@ -38,18 +38,18 @@
             <td class="p-3 font-semibold">{{ $s->received_po_total !== null ? number_format($s->received_po_total, 2) : '—' }}</td>
             <td class="p-3 font-semibold {{ $s->balance > 0 ? 'text-red-600' : '' }}">{{ $s->balance !== null ? number_format($s->balance, 2) : '—' }}</td>
             <td class="p-3">
-                <span class="px-2 py-1 rounded text-xs {{ $s->is_active ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600' }}">{{ $s->is_active ? 'Active' : 'Disabled' }}</span>
+                <span class="px-2 py-1 rounded text-xs {{ $s->is_active ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600' }}">{{ $s->is_active ? __('Active') : __('Disabled') }}</span>
             </td>
             <td class="p-3 space-x-1 whitespace-nowrap">
-                <a href="{{ route('suppliers.show', $s) }}" class="btn btn-blue">View</a>
-                <a href="{{ route('suppliers.edit', $s) }}" class="btn btn-blue">Edit</a>
+                <a href="{{ route('suppliers.show', $s) }}" class="btn btn-blue">{{ __('View') }}</a>
+                <a href="{{ route('suppliers.edit', $s) }}" class="btn btn-blue">{{ __('Edit') }}</a>
                 <form method="POST" action="{{ route('suppliers.toggle-active', $s) }}" class="inline">
                     @csrf
-                    <button class="btn {{ $s->is_active ? 'btn-yellow' : 'btn-solid-green' }}">{{ $s->is_active ? 'Disable' : 'Enable' }}</button>
+                    <button class="btn {{ $s->is_active ? 'btn-yellow' : 'btn-solid-green' }}">{{ $s->is_active ? __('Disable') : __('Enable') }}</button>
                 </form>
                 @if(auth()->user()->role === 'admin')
-                <form method="POST" action="{{ route('suppliers.destroy', $s) }}" class="inline confirm-submit" data-confirm-message="Move this supplier to Trash? You can restore them anytime from Trash.">
-                    @csrf @method('DELETE')<button class="btn btn-red">Delete</button>
+                <form method="POST" action="{{ route('suppliers.destroy', $s) }}" class="inline confirm-submit" data-confirm-message="{{ __('Move this supplier to Trash? You can restore them anytime from Trash.') }}">
+                    @csrf @method('DELETE')<button class="btn btn-red">{{ __('Delete') }}</button>
                 </form>
                 @endif
             </td>

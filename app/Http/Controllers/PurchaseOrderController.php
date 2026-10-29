@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Product;
+use App\Models\ProductBatch;
 use App\Models\ProductPriceHistory;
 use App\Models\PurchaseOrder;
 use App\Models\PurchaseOrderDraft;
@@ -418,7 +419,16 @@ class PurchaseOrderController extends Controller
      *  M7 — a change to the product's purchase_price /
      *  purchase_discount_percent here is recorded in
      *  ProductPriceHistory. M8 — receiving past a product's max_stock
-     *  (when set) is rejected. */
+     *  (when set) is rejected.
+     *  v3.0 FEATURE 1 — per-line OPTIONAL batch_no + expiry_date inputs
+     *  (see the receive form): each received line also creates one
+     *  ProductBatch. A blank batch_no auto-generates
+     *  "PO-{po_id}-L{line}" (1-based line position); a line posted
+     *  without any batch inputs at all (old form posts) gets an auto
+     *  batch_no and null expiry. Batch creation is guarded so it can
+     *  NEVER fail a receive (missing table, bad input) — product.stock
+     *  stays authoritative. Lines received at 0 create no batch: there
+     *  is nothing to track. */
     public function receive(Request $request, PurchaseOrder $purchaseOrder)
     {
         if ($purchaseOrder->status === 'received') {
@@ -428,6 +438,10 @@ class PurchaseOrderController extends Controller
         $data = $request->validate([
             'items' => ['required', 'array'],
             'items.*.received_quantity' => ['required', 'numeric', 'min:0'],
+            // v3.0 FEATURE 1 — both optional: old form posts carry
+            // neither key, and validation must keep passing for them.
+            'items.*.batch_no' => ['nullable', 'string', 'max:255'],
+            'items.*.expiry_date' => ['nullable', 'date'],
             'allow_over_receive' => ['nullable', 'boolean'],
         ]);
 
@@ -467,7 +481,7 @@ class PurchaseOrderController extends Controller
                 // stays correct even if one product appears on two lines.
                 $projectedStock = [];
 
-                foreach ($locked->items()->with('product')->get() as $item) {
+                foreach ($locked->items()->with('product')->get() as $lineIndex => $item) {
                     $receivedQty = (float) $data['items'][$item->id]['received_quantity'];
 
                     // M8 — refuse receiving past max_stock when it is set.
@@ -520,6 +534,33 @@ class PurchaseOrderController extends Controller
                             'user_id' => auth()->id(),
                             'purchase_order_id' => $purchaseOrder->id,
                         ]);
+
+                        // v3.0 FEATURE 1 — one batch per received line.
+                        // Guarded + caught: a batch problem must never
+                        // fail the receive itself.
+                        try {
+                            if (Schema::hasTable('product_batches')) {
+                                $batchInput = $data['items'][$item->id] ?? [];
+                                $batchNo = trim((string) ($batchInput['batch_no'] ?? ''));
+                                if ($batchNo === '') {
+                                    $batchNo = "PO-{$locked->id}-L" . ($lineIndex + 1);
+                                }
+                                $expiryDate = $batchInput['expiry_date'] ?? null;
+                                if ($expiryDate === '') {
+                                    $expiryDate = null;
+                                }
+                                ProductBatch::create([
+                                    'product_id' => $item->product_id,
+                                    'batch_no' => $batchNo,
+                                    'expiry_date' => $expiryDate,
+                                    'quantity' => $receivedQty,
+                                    'remaining_quantity' => $receivedQty,
+                                    'purchase_order_id' => $locked->id,
+                                ]);
+                            }
+                        } catch (\Throwable $e) {
+                            report($e);
+                        }
                     }
                 }
                 $locked->update(['status' => 'received']);

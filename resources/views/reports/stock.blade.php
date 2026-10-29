@@ -1,38 +1,39 @@
 @extends('layouts.app')
-@section('title', 'Stock Report')
+@section('title', __('Stock Report'))
 @section('content')
 <div class="flex justify-between items-center mb-4">
-    <h1 class="text-2xl font-bold">Stock Report</h1>
+    <h1 class="text-2xl font-bold">{{ __('Stock Report') }}</h1>
     <div class="flex gap-2">
         @include('reports._export_pdf')
-        <a href="{{ route('reports.index') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back to Reports</a>
+        <a href="{{ route('reports.export.stock', request()->only(['filter', 'search'])) }}" class="btn btn-solid-green print:hidden">{{ __('Export CSV') }}</a>
+        <a href="{{ route('reports.index') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> {{ __('Back to Reports') }}</a>
     </div>
 </div>
 <form method="GET" data-ajax-filter="stock-report" class="mb-4 print:hidden">
     <input type="hidden" name="filter" value="{{ $filter }}">
-    <input type="text" id="stock-search-input" name="search" value="{{ request('search') }}" placeholder="Search product..." class="border rounded px-3 py-2 w-64">
-    <button class="btn btn-gray">Search</button>
+    <input type="text" id="stock-search-input" name="search" value="{{ request('search') }}" placeholder="{{ __('Search product...') }}" class="border rounded px-3 py-2 w-64">
+    <button class="btn btn-gray">{{ __('Search') }}</button>
 </form>
 
 <div data-ajax-list="stock-report">
 <div class="bg-white p-5 rounded-xl shadow-sm mb-4">
-    <div class="text-gray-500 text-sm">Total Stock Value (at net purchase price, after supplier discount)</div>
+    <div class="text-gray-500 text-sm">{{ __('Total Stock Value (at net purchase price, after supplier discount)') }}</div>
     <div class="text-2xl font-bold" id="total-stock-value">{{ number_format($totalStockValue, 2) }}</div>
 </div>
 <div class="flex flex-wrap items-center justify-between gap-2 mb-4 print:hidden">
     <div class="flex gap-2">
-        <a href="{{ route('reports.stock', ['search' => request('search')]) }}" class="btn {{ $filter === 'all' ? 'btn-dark' : 'btn-gray' }}" data-filter-label="All Products">All ({{ $outOfStockCount + $availableCount }})</a>
-        <a href="{{ route('reports.stock', ['filter' => 'available', 'search' => request('search')]) }}" class="btn {{ $filter === 'available' ? 'btn-dark' : 'btn-gray' }}" data-filter-label="Stock Available">Stock Available ({{ $availableCount }})</a>
-        <a href="{{ route('reports.stock', ['filter' => 'out', 'search' => request('search')]) }}" class="btn {{ $filter === 'out' ? 'btn-dark' : 'btn-gray' }}" data-filter-label="Out of Stock">Out of Stock ({{ $outOfStockCount }})</a>
+        <a href="{{ route('reports.stock', ['search' => request('search')]) }}" class="btn {{ $filter === 'all' ? 'btn-dark' : 'btn-gray' }}" data-filter-label="All Products">{{ __('All (') }}{{ $outOfStockCount + $availableCount }})</a>
+        <a href="{{ route('reports.stock', ['filter' => 'available', 'search' => request('search')]) }}" class="btn {{ $filter === 'available' ? 'btn-dark' : 'btn-gray' }}" data-filter-label="Stock Available">{{ __('Stock Available (') }}{{ $availableCount }})</a>
+        <a href="{{ route('reports.stock', ['filter' => 'out', 'search' => request('search')]) }}" class="btn {{ $filter === 'out' ? 'btn-dark' : 'btn-gray' }}" data-filter-label="Out of Stock">{{ __('Out of Stock (') }}{{ $outOfStockCount }})</a>
     </div>
     <button type="button" id="download-stock-pdf" class="btn btn-solid-green">
         <svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-        Download PDF (this page)
+        {{ __('Download PDF (this page)') }}
     </button>
 </div>
 <div class="bg-white rounded-xl shadow-sm overflow-x-auto">
 <table class="w-full text-sm" id="stock-report-table">
-    <thead class="bg-gray-50 text-left"><tr><th class="p-3">Product</th><th class="p-3">Category</th><th class="p-3">Stock</th><th class="p-3">Stock Value</th><th class="p-3">Status</th></tr></thead>
+    <thead class="bg-gray-50 text-left"><tr><th class="p-3">{{ __('Product') }}</th><th class="p-3">{{ __('Category') }}</th><th class="p-3">{{ __('Stock') }}</th><th class="p-3">{{ __('Stock Value') }}</th><th class="p-3">{{ __('Status') }}</th></tr></thead>
     <tbody>
     @foreach($products as $p)
         <tr class="border-t">
@@ -42,9 +43,9 @@
             <td class="p-3">{{ number_format($p->stock * $p->net_purchase_price, 2) }}</td>
             <td class="p-3">
                 @if($p->stock <= 0)
-                    <span class="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full">Out of Stock</span>
+                    <span class="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full">{{ __('Out of Stock') }}</span>
                 @elseif($p->isLowStock())
-                    <span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full">Low Stock</span>
+                    <span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full">{{ __('Low Stock') }}</span>
                 @else
                     <span class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">OK</span>
                 @endif
@@ -56,7 +57,7 @@
 </div>
 <div class="mt-4">
     {{ $products->links() }}
-    <p class="text-xs text-gray-400 mt-2">20 products per page. The Download PDF button below exports only the products visible on this page.</p>
+    <p class="text-xs text-gray-400 mt-2">{{ __('20 products per page. The Download PDF button below exports only the products visible on this page.') }}</p>
 </div>
 </div>
 

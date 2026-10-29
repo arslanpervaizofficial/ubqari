@@ -1,34 +1,34 @@
 @extends('layouts.app')
-@section('title', 'Orders')
+@section('title', __('Orders'))
 @section('content')
-<h1 class="text-2xl font-bold mb-4">Orders</h1>
+<h1 class="text-2xl font-bold mb-4">{{ __('Orders') }}</h1>
 
 <form method="GET" data-ajax-filter="orders" class="flex flex-wrap items-end gap-2 mb-4">
     <div>
-        <label class="block text-xs text-gray-500 mb-1">Search order # / ID</label>
-        <input type="text" name="q" value="{{ request('q') }}" placeholder="e.g. ORD-20260907 or 42" class="border rounded px-3 w-56">
+        <label class="block text-xs text-gray-500 mb-1">{{ __('Search order # / ID') }}</label>
+        <input type="text" name="q" value="{{ request('q') }}" placeholder="{{ __('e.g. ORD-20260907 or 42') }}" class="border rounded px-3 w-56">
     </div>
     <div>
-        <label class="block text-xs text-gray-500 mb-1">Range</label>
+        <label class="block text-xs text-gray-500 mb-1">{{ __('Range') }}</label>
         <select name="range" id="range-select" class="border rounded px-3">
-            <option value="today" @selected($range === 'today')>Daily (Today)</option>
-            <option value="week" @selected($range === 'week')>Weekly (This Week)</option>
-            <option value="month" @selected($range === 'month')>Monthly (This Month)</option>
-            <option value="custom" @selected($range === 'custom')>Custom / Calendar</option>
-            <option value="all" @selected($range === 'all')>All Time</option>
+            <option value="today" @selected($range === 'today')>{{ __('Daily (Today)') }}</option>
+            <option value="week" @selected($range === 'week')>{{ __('Weekly (This Week)') }}</option>
+            <option value="month" @selected($range === 'month')>{{ __('Monthly (This Month)') }}</option>
+            <option value="custom" @selected($range === 'custom')>{{ __('Custom / Calendar') }}</option>
+            <option value="all" @selected($range === 'all')>{{ __('All Time') }}</option>
         </select>
     </div>
     <div id="custom-range-fields" class="flex items-end gap-2 {{ $range === 'custom' ? '' : 'hidden' }}">
         <div>
-            <label class="block text-xs text-gray-500 mb-1">From</label>
+            <label class="block text-xs text-gray-500 mb-1">{{ __('From') }}</label>
             <input type="date" name="from" value="{{ request('from') }}" class="border rounded px-3">
         </div>
         <div>
-            <label class="block text-xs text-gray-500 mb-1">To</label>
+            <label class="block text-xs text-gray-500 mb-1">{{ __('To') }}</label>
             <input type="date" name="to" value="{{ request('to') }}" class="border rounded px-3">
         </div>
     </div>
-    <button class="btn btn-gray">Filter</button>
+    <button class="btn btn-gray">{{ __('Filter') }}</button>
 </form>
 
 <div data-ajax-list="orders">
@@ -37,13 +37,13 @@
     <span data-bulk-count="orders" class="text-sm text-gray-500"></span>
     <button type="button" class="btn btn-red" data-bulk-submit="orders"
             data-action-url="{{ route('orders.destroy-selected') }}"
-            data-confirm-message="Move the selected orders to Trash? Stock and customer balances will be adjusted.">
-        Delete Selected
+            data-confirm-message="{{ __('Move the selected orders to Trash? Stock and customer balances will be adjusted.') }}">
+        {{ __('Delete Selected') }}
     </button>
     <button type="button" class="btn btn-red" data-bulk-all-submit
             data-action-url="{{ route('orders.destroy-all') }}"
-            data-confirm-message="Move ALL orders in this filtered list to Trash? Stock and customer balances will be adjusted.">
-        Delete All
+            data-confirm-message="{{ __('Move ALL orders in this filtered list to Trash? Stock and customer balances will be adjusted.') }}">
+        {{ __('Delete All') }}
     </button>
 </div>
 @endif
@@ -52,14 +52,14 @@
     <thead class="bg-gray-50 text-left">
         <tr>
             @if(auth()->user()->role === 'admin')<th class="p-3"><input type="checkbox" data-bulk-select-all="orders"></th>@endif
-            <th class="p-3">Order #</th>
-            <th class="p-3">Date</th>
-            <th class="p-3">Customer</th>
-            <th class="p-3">Cashier</th>
-            <th class="p-3">Items</th>
-            <th class="p-3">Total</th>
-            <th class="p-3">Status</th>
-            <th class="p-3">Actions</th>
+            <th class="p-3">{{ __('Order #') }}</th>
+            <th class="p-3">{{ __('Date') }}</th>
+            <th class="p-3">{{ __('Customer') }}</th>
+            <th class="p-3">{{ __('Cashier') }}</th>
+            <th class="p-3">{{ __('Items') }}</th>
+            <th class="p-3">{{ __('Total') }}</th>
+            <th class="p-3">{{ __('Status') }}</th>
+            <th class="p-3">{{ __('Actions') }}</th>
         </tr>
     </thead>
     <tbody>
@@ -70,12 +70,12 @@
             <td class="p-3">
                 <span id="date-display-{{ $o->id }}">{{ $o->created_at->format('Y-m-d H:i') }}</span>
                 @if(in_array(auth()->user()->role, ['admin', 'manager']) && in_array($o->status, ['completed', 'cancelled']))
-                    <button type="button" class="text-[11px] px-1.5 py-0.5 border rounded text-gray-500 hover:bg-gray-50 ml-1" onclick="toggleDateForm({{ $o->id }})">Edit</button>
+                    <button type="button" class="text-[11px] px-1.5 py-0.5 border rounded text-gray-500 hover:bg-gray-50 ml-1" onclick="toggleDateForm({{ $o->id }})">{{ __('Edit') }}</button>
                     <form id="date-form-{{ $o->id }}" method="POST" action="{{ route('orders.change-date', $o) }}" class="hidden mt-1 flex items-center gap-1">
                         @csrf
                         <input type="datetime-local" name="order_date" value="{{ $o->created_at->format('Y-m-d\TH:i') }}" class="border rounded px-1 py-0.5 text-xs" required>
-                        <button class="btn btn-blue !px-2 !py-0.5 text-xs">Save</button>
-                        <button type="button" class="btn btn-gray !px-2 !py-0.5 text-xs" onclick="toggleDateForm({{ $o->id }})">Cancel</button>
+                        <button class="btn btn-blue !px-2 !py-0.5 text-xs">{{ __('Save') }}</button>
+                        <button type="button" class="btn btn-gray !px-2 !py-0.5 text-xs" onclick="toggleDateForm({{ $o->id }})">{{ __('Cancel') }}</button>
                     </form>
                 @endif
             </td>
@@ -87,22 +87,22 @@
                 <span class="px-2 py-1 rounded text-xs {{ $o->status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600' }}">{{ $o->status }}</span>
             </td>
             <td class="p-3 space-x-1 whitespace-nowrap">
-                <a href="{{ route('pos.invoice', $o) }}" class="btn btn-gray">View</a>
+                <a href="{{ route('pos.invoice', $o) }}" class="btn btn-gray">{{ __('View') }}</a>
                 @if($o->status === 'completed')
                 <form method="POST" action="{{ route('orders.edit', $o) }}" class="inline">
                     @csrf
-                    <button class="btn btn-blue">Update</button>
+                    <button class="btn btn-blue">{{ __('Update') }}</button>
                 </form>
                 @endif
                 @if(auth()->user()->role === 'admin' && in_array($o->status, ['completed', 'cancelled']))
                 <form method="POST" action="{{ route('orders.destroy', $o) }}" class="inline confirm-submit" data-confirm-message="Move order {{ $o->order_number }} to Trash? Stock and customer balance will be recounted automatically.">
-                    @csrf @method('DELETE')<button class="btn btn-red">Delete</button>
+                    @csrf @method('DELETE')<button class="btn btn-red">{{ __('Delete') }}</button>
                 </form>
                 @endif
             </td>
         </tr>
     @empty
-        <tr><td class="p-3 text-gray-400" colspan="9">No orders in this range.</td></tr>
+        <tr><td class="p-3 text-gray-400" colspan="9">{{ __('No orders in this range.') }}</td></tr>
     @endforelse
     </tbody>
 </table>

@@ -6,6 +6,7 @@ use App\Models\Customer;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
+use App\Models\ProductBatch;
 use App\Models\PurchaseOrder;
 use App\Models\PurchaseOrderItem;
 use App\Models\StockMovement;
@@ -211,6 +212,17 @@ class StockReturnController extends Controller
             foreach ($data['items'] as $line) {
                 $product = Product::findOrFail($line['product_id']);
                 $product->increment('stock', $line['quantity']);
+
+                // v3.0 FEATURE 1 — customer returns go back into
+                // batches: earliest-expiry partially-consumed batches
+                // are topped up first (never above their original
+                // quantity); any remainder — or the whole quantity when
+                // the product has no batches at all — lands in an
+                // "UNBATCHED" batch (created if needed). Supplier
+                // returns deliberately do NOT touch batches (see
+                // supplierStore(), unchanged). restoreReturned() never
+                // throws, so a batch problem can never fail a return.
+                ProductBatch::restoreReturned((int) $product->id, (float) $line['quantity']);
 
                 $discountPercent = $line['discount_percent'] ?? 0;
                 $gross = $line['quantity'] * $line['unit_price'];

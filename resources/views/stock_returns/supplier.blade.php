@@ -1,15 +1,15 @@
 @extends('layouts.app')
-@section('title', 'Return to Supplier')
+@section('title', __('Return to Supplier'))
 @section('content')
-<h1 class="text-2xl font-bold mb-4">Return to Supplier</h1>
-<p class="text-gray-500 text-sm mb-4">Deducts the returned quantity from stock for each item below, at its net value (after discount). Shows up in the Purchase Report as a deduction.</p>
+<h1 class="text-2xl font-bold mb-4">{{ __('Return to Supplier') }}</h1>
+<p class="text-gray-500 text-sm mb-4">{{ __('Deducts the returned quantity from stock for each item below, at its net value (after discount). Shows up in the Purchase Report as a deduction.') }}</p>
 
 <div class="bg-white p-4 rounded-xl shadow-sm w-full mb-4">
-    <label class="block text-sm text-gray-600 mb-1">Load Previous Purchase Order (optional)</label>
-    <p class="text-xs text-gray-400 mb-2">Type the PO ID from the original purchase — its items, cost price and discount load in below automatically, ready to adjust.</p>
+    <label class="block text-sm text-gray-600 mb-1">{{ __('Load Previous Purchase Order (optional)') }}</label>
+    <p class="text-xs text-gray-400 mb-2">{{ __('Type the PO ID from the original purchase — its items, cost price and discount load in below automatically, ready to adjust.') }}</p>
     <div class="flex gap-2 max-w-md">
-        <input type="text" id="load-po-id" placeholder="e.g. 12 or PO #12" class="flex-1 border rounded px-3 py-2">
-        <button type="button" id="load-po-btn" class="btn btn-solid-blue whitespace-nowrap">Load PO</button>
+        <input type="text" id="load-po-id" placeholder="{{ __('e.g. 12 or PO #12') }}" class="flex-1 border rounded px-3 py-2">
+        <button type="button" id="load-po-btn" class="btn btn-solid-blue whitespace-nowrap">{{ __('Load PO') }}</button>
     </div>
     <p id="load-po-error" class="text-red-600 text-sm mt-2 hidden"></p>
     <p id="load-po-success" class="text-green-700 text-sm mt-2 hidden"></p>
@@ -18,7 +18,7 @@
 <form method="POST" action="{{ route('stock-returns.supplier-store') }}" novalidate class="bg-white p-6 rounded-xl shadow-sm w-full">
     @csrf
     <div class="mb-4 max-w-sm">
-        <label class="block text-sm text-gray-600 mb-1">Supplier</label>
+        <label class="block text-sm text-gray-600 mb-1">{{ __('Supplier') }}</label>
         <select name="supplier_id" id="supplier-select" required data-label="Supplier" class="w-full border rounded px-3 py-2">
             @foreach($suppliers as $s)<option value="{{ $s->id }}">{{ $s->name }}</option>@endforeach
         </select>
@@ -28,33 +28,33 @@
     <table class="w-full text-sm mb-2">
         <thead class="text-left text-gray-500">
             <tr>
-                <th class="py-1 pr-4">Product</th>
-                <th class="px-4">Current Stock</th>
-                <th class="px-4">Quantity Returned</th>
-                <th class="px-4">New Stock</th>
-                <th class="px-4">Unit Cost</th>
-                <th class="px-4">Discount %</th>
-                <th class="px-4">Reason</th>
-                <th class="px-4">Net Line Total</th>
+                <th class="py-1 pr-4">{{ __('Product') }}</th>
+                <th class="px-4">{{ __('Current Stock') }}</th>
+                <th class="px-4">{{ __('Quantity Returned') }}</th>
+                <th class="px-4">{{ __('New Stock') }}</th>
+                <th class="px-4">{{ __('Unit Cost') }}</th>
+                <th class="px-4">{{ __('Discount %') }}</th>
+                <th class="px-4">{{ __('Reason') }}</th>
+                <th class="px-4">{{ __('Net Line Total') }}</th>
                 <th></th>
             </tr>
         </thead>
         <tbody id="sr-items"></tbody>
     </table>
     </div>
-    <button type="button" id="add-line" class="text-sm text-blue-600 mb-4">+ Add another product</button>
+    <button type="button" id="add-line" class="text-sm text-blue-600 mb-4">+ {{ __('Add another product') }}</button>
 
     @error('quantity') <p class="text-red-600 text-sm mb-4">{{ $message }}</p> @enderror
 
     <div class="border-t pt-4 flex justify-end">
         <div class="text-right">
-            <div class="text-gray-500 text-sm">Total Return Value (after discount)</div>
+            <div class="text-gray-500 text-sm">{{ __('Total Return Value (after discount)') }}</div>
             <div class="text-2xl font-bold" id="sr-total">0.00</div>
         </div>
     </div>
 
     <div class="mt-4">
-        <button class="btn btn-solid-blue">Record Return</button>
+        <button class="btn btn-solid-blue">{{ __('Record Return') }}</button>
     </div>
 </form>
 

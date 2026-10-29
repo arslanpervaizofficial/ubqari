@@ -7,7 +7,7 @@
     }
 </style>
 
-<div id="invoice-card" class="max-w-2xl mx-auto bg-white p-6 rounded-xl shadow-sm">
+<div id="invoice-card" dir="ltr" class="max-w-2xl mx-auto bg-white p-6 rounded-xl shadow-sm">
     {{-- v2.2 (F6): a held/in-progress cart is a draft, not a sale —
          it must never print as a real INVOICE with the full amount
          "Due". Quotations already had their own label; drafts get
@@ -16,23 +16,23 @@
     <div class="invoice-header flex justify-between mb-4">
         <div>
             <h1 class="text-xl font-bold">{{ \App\Models\AppSetting::current()->print_title }}</h1>
-            <p class="text-sm text-gray-500">{{ $order->is_quotation ? 'QUOTATION / ESTIMATE' : ($isDraft ? 'DRAFT — NOT A SALE' : 'INVOICE') }}</p>
+            <p class="text-sm text-gray-500">{{ $order->is_quotation ? __('QUOTATION / ESTIMATE') : ($isDraft ? __('DRAFT — NOT A SALE') : __('INVOICE')) }}</p>
         </div>
         <div class="text-right text-sm">
-            <div>Order #: {{ $order->order_number }}</div>
-            <div>Date: {{ $order->created_at->format('Y-m-d H:i') }}</div>
-            <div>Cashier: {{ $order->cashier->name ?? '—' }}</div>
+            <div>{{ __('Order #') }}: {{ $order->order_number }}</div>
+            <div>{{ __('Date') }}: {{ $order->created_at->format('Y-m-d H:i') }}</div>
+            <div>{{ __('Cashier') }}: {{ $order->cashier->name ?? '—' }}</div>
         </div>
     </div>
 
     @if($isDraft)
-    <p class="text-sm font-bold text-red-600 mb-4">DRAFT — NOT A SALE: this cart has not been completed yet. No payment is due on this document.</p>
+    <p class="text-sm font-bold text-red-600 mb-4">{{ __('DRAFT — NOT A SALE: this cart has not been completed yet. No payment is due on this document.') }}</p>
     @endif
 
-    <p class="mb-2 text-sm">Customer: {{ $order->customer->name ?? 'Walk-in' }}</p>
+    <p class="mb-2 text-sm">{{ __('Customer') }}: {{ $order->customer->name ?? 'Walk-in' }}</p>
 
     <table class="w-full text-sm mb-4">
-        <thead class="border-b text-left"><tr><th class="py-1">#</th><th>Item</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
+        <thead class="border-b text-left"><tr><th class="py-1">#</th><th>{{ __('Item') }}</th><th>{{ __('Qty') }}</th><th>{{ __('Price') }}</th><th>{{ __('Total') }}</th></tr></thead>
         <tbody>
         @foreach($order->items as $item)
             <tr class="border-b">
@@ -45,19 +45,19 @@
         @endforeach
         </tbody>
     </table>
-    <p class="text-xs text-gray-500 mb-4">Total Items: {{ $order->items->count() }} product(s), {{ $order->items->sum('quantity') }} unit(s)</p>
+    <p class="text-xs text-gray-500 mb-4">{{ __('Total Items') }}: {{ $order->items->count() }} product(s), {{ $order->items->sum('quantity') }} unit(s)</p>
 
     <div class="text-right text-sm space-y-1">
-        <div>Subtotal: {{ number_format($order->subtotal, 2) }}</div>
-        <div>Item Discounts: -{{ number_format($order->line_discount_total, 2) }}</div>
-        <div>Overall Discount ({{ $order->discount_percent }}%): -{{ number_format($order->discount_amount, 2) }}</div>
-        <div class="font-bold text-lg">Total: {{ number_format($order->total, 2) }}</div>
+        <div>{{ __('Subtotal') }}: {{ number_format($order->subtotal, 2) }}</div>
+        <div>{{ __('Item Discounts: -') }}{{ number_format($order->line_discount_total, 2) }}</div>
+        <div>{{ __('Overall Discount (') }}{{ $order->discount_percent }}%): -{{ number_format($order->discount_amount, 2) }}</div>
+        <div class="font-bold text-lg">{{ __('Total') }}: {{ number_format($order->total, 2) }}</div>
         @if(!$order->is_quotation && !$isDraft)
-        <div>Paid: {{ number_format($order->paid_amount, 2) }} ({{ $order->payment_method }})</div>
+        <div>{{ __('Paid') }}: {{ number_format($order->paid_amount, 2) }} ({{ $order->payment_method }})</div>
         @if($order->bank_name || $order->transaction_id)
             <div class="text-gray-500">{{ $order->bank_name }} @if($order->transaction_id) · Txn: {{ $order->transaction_id }} @endif</div>
         @endif
-        <div>{{ $order->due_amount < 0 ? 'Advance (this order)' : 'Due (this order)' }}: {{ number_format($order->due_amount, 2) }}</div>
+        <div>{{ $order->due_amount < 0 ? __('Advance (this order)') : __('Due (this order)') }}: {{ number_format($order->due_amount, 2) }}</div>
         @php
             // customer->credit_balance already has THIS order's (signed)
             // due_amount folded into it, so subtracting it back out
@@ -66,33 +66,33 @@
             $previousBal = $order->customer ? round($balanceNow - $order->due_amount, 2) : 0;
         @endphp
         @if($order->customer && abs($previousBal) > 0.004)
-        <div class="border-t pt-1 mt-1">{{ $previousBal > 0 ? 'Previous Balance Due' : 'Previous Advance' }}: {{ number_format(abs($previousBal), 2) }}</div>
+        <div class="border-t pt-1 mt-1">{{ $previousBal > 0 ? __('Previous Balance Due') : __('Previous Advance') }}: {{ number_format(abs($previousBal), 2) }}</div>
         @endif
         @if($order->customer && abs($balanceNow) > 0.004 && abs($previousBal) > 0.004)
-        <div class="font-bold text-lg {{ $balanceNow > 0 ? 'text-red-600' : 'text-blue-700' }}">{{ $balanceNow > 0 ? 'Total Amount Due Now' : 'Advance/Credit Balance' }}: {{ number_format(abs($balanceNow), 2) }}</div>
+        <div class="font-bold text-lg {{ $balanceNow > 0 ? 'text-red-600' : 'text-blue-700' }}">{{ $balanceNow > 0 ? __('Total Amount Due Now') : __('Advance/Credit Balance') }}: {{ number_format(abs($balanceNow), 2) }}</div>
         @endif
         @endif
     </div>
 
     <div class="mt-6 flex flex-wrap gap-2 print:hidden" id="invoice-actions">
-        <button id="print-a4-btn" class="bg-gray-900 text-white px-4 py-2 rounded">Print (A4)</button>
-        <button id="print-thermal-btn" class="bg-gray-700 text-white px-4 py-2 rounded">Print (Thermal)</button>
+        <button id="print-a4-btn" class="bg-gray-900 text-white px-4 py-2 rounded">{{ __('Print (A4)') }}</button>
+        <button id="print-thermal-btn" class="bg-gray-700 text-white px-4 py-2 rounded">{{ __('Print (Thermal)') }}</button>
         <button id="export-pdf-btn" class="bg-gray-200 px-4 py-2 rounded">
             <svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M13 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V9l-6-6z"/>
                 <path stroke-linecap="round" stroke-linejoin="round" d="M13 3v5a1 1 0 001 1h5"/>
             </svg>
-            Export PDF
+            {{ __('Export PDF') }}
         </button>
         <button id="whatsapp-pdf-btn" class="bg-green-600 text-white px-4 py-2 rounded">
             <svg class="w-4 h-4 inline -mt-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.149-.15.35-.372.523-.558.174-.185.223-.309.35-.526.148-.236.075-.443-.024-.606-.075-.15-.673-1.62-.923-2.228-.24-.57-.483-.5-.673-.51h-.573c-.198 0-.52.074-.792.372-.273.297-1.04 1.017-1.04 2.479 0 1.462 1.065 2.875 1.213 3.075.149.198 2.06 3.16 5.058 4.437 2.996 1.276 2.996.85 3.535.795.537-.05 1.758-.716 2.006-1.412.248-.694.248-1.29.174-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.87.505 3.62 1.386 5.126L2 22l4.994-1.31A9.955 9.955 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2zm0 18.15a8.14 8.14 0 01-4.16-1.14l-.298-.177-3.098.813.827-3.023-.194-.31A8.15 8.15 0 013.85 12c0-4.5 3.65-8.15 8.15-8.15S20.15 7.5 20.15 12 16.5 20.15 12 20.15z"/></svg>
-            WhatsApp PDF
+            {{ __('WhatsApp PDF') }}
         </button>
-        <a href="{{ route('pos.index') }}" class="bg-gray-200 px-4 py-2 rounded">Back to Billing</a>
+        <a href="{{ route('pos.index') }}" class="bg-gray-200 px-4 py-2 rounded">{{ __('Back to Billing') }}</a>
         @if($order->status === 'completed')
         <form method="POST" action="{{ route('pos.reorder', $order) }}">
             @csrf
-            <button class="bg-blue-600 text-white px-4 py-2 rounded">Quick Re-order</button>
+            <button class="bg-blue-600 text-white px-4 py-2 rounded">{{ __('Quick Re-order') }}</button>
         </form>
         @endif
     </div>
@@ -109,12 +109,12 @@
     <div class="r">
         <div class="c title">{{ $cfg->print_title }}</div>
         @if($cfg->print_address)<div class="c hdr">{{ $cfg->print_address }}</div>@endif
-        @if($cfg->print_phone)<div class="c hdr">Phone: {{ $cfg->print_phone }}</div>@endif
-        <div class="c sub">{{ $order->is_quotation ? 'QUOTATION / ESTIMATE' : ($isDraft ? 'DRAFT — NOT A SALE' : 'INVOICE') }}</div>
+        @if($cfg->print_phone)<div class="c hdr">{{ __('Phone') }}: {{ $cfg->print_phone }}</div>@endif
+        <div class="c sub">{{ $order->is_quotation ? __('QUOTATION / ESTIMATE') : ($isDraft ? __('DRAFT — NOT A SALE') : __('INVOICE')) }}</div>
         <div class="hr"></div>
-        <div>Order #: {{ $order->order_number }}</div>
-        <div>Customer: {{ $order->customer->name ?? 'Walk-in' }}</div>
-        <div>Cashier: {{ $order->cashier->name ?? '—' }}</div>
+        <div>{{ __('Order #') }}: {{ $order->order_number }}</div>
+        <div>{{ __('Customer') }}: {{ $order->customer->name ?? 'Walk-in' }}</div>
+        <div>{{ __('Cashier') }}: {{ $order->cashier->name ?? '—' }}</div>
         <div class="hr"></div>
         @foreach($order->items as $item)
             <div class="item">
@@ -123,27 +123,27 @@
             </div>
         @endforeach
         <div class="hr"></div>
-        <div class="row"><span>Subtotal:</span><span>{{ number_format($order->subtotal, 2) }}</span></div>
-        <div class="row"><span>Item Discount:</span><span>-{{ number_format($order->line_discount_total, 2) }}</span></div>
+        <div class="row"><span>{{ __('Subtotal') }}:</span><span>{{ number_format($order->subtotal, 2) }}</span></div>
+        <div class="row"><span>{{ __('Item Discount') }}:</span><span>-{{ number_format($order->line_discount_total, 2) }}</span></div>
         @if($order->discount_amount > 0)
-        <div class="row"><span>Discount ({{ rtrim(rtrim(number_format($order->discount_percent, 2, '.', ''), '0'), '.') }}%):</span><span>-{{ number_format($order->discount_amount, 2) }}</span></div>
+        <div class="row"><span>{{ __('Discount (') }}{{ rtrim(rtrim(number_format($order->discount_percent, 2, '.', ''), '0'), '.') }}%):</span><span>-{{ number_format($order->discount_amount, 2) }}</span></div>
         @endif
-        <div class="row big"><span>Total</span><span>{{ number_format($order->total, 2) }}</span></div>
+        <div class="row big"><span>{{ __('Total') }}</span><span>{{ number_format($order->total, 2) }}</span></div>
         @if(!$order->is_quotation && !$isDraft)
             <div class="hr"></div>
-            <div class="row"><span>Paid ({{ $order->payment_method }}):</span><span>{{ number_format($order->paid_amount, 2) }}</span></div>
+            <div class="row"><span>{{ __('Paid (') }}{{ $order->payment_method }}):</span><span>{{ number_format($order->paid_amount, 2) }}</span></div>
             @if($order->bank_name || $order->transaction_id)
                 <div class="muted">{{ $order->bank_name }} @if($order->transaction_id) Txn: {{ $order->transaction_id }} @endif</div>
             @endif
-            <div class="row"><span>{{ $order->due_amount < 0 ? 'Advance (this order):' : 'Due (this order):' }}</span><span>{{ number_format(abs($order->due_amount), 2) }}</span></div>
+            <div class="row"><span>{{ $order->due_amount < 0 ? __('Advance (this order):') : __('Due (this order):') }}</span><span>{{ number_format(abs($order->due_amount), 2) }}</span></div>
             @if($order->customer && abs($previousBal ?? 0) > 0.004)
-                <div class="row"><span>{{ $previousBal > 0 ? 'Previous Balance:' : 'Previous Advance:' }}</span><span>{{ number_format(abs($previousBal), 2) }}</span></div>
-                <div class="row big"><span>{{ $balanceNow > 0 ? 'Total Due' : 'Advance' }}</span><span>{{ number_format(abs($balanceNow), 2) }}</span></div>
+                <div class="row"><span>{{ $previousBal > 0 ? __('Previous Balance:') : __('Previous Advance:') }}</span><span>{{ number_format(abs($previousBal), 2) }}</span></div>
+                <div class="row big"><span>{{ $balanceNow > 0 ? __('Total Due') : __('Advance') }}</span><span>{{ number_format(abs($balanceNow), 2) }}</span></div>
             @endif
         @endif
         <div class="hr"></div>
         <div class="row foot"><span>{{ $order->created_at->format('d.m.Y') }}</span><span>{{ $order->created_at->format('H:i:s') }}</span></div>
-        <div class="c foot" style="margin-top:4px">Thank you!</div>
+        <div class="c foot" style="margin-top:4px">{{ __('Thank you!') }}</div>
     </div>
 </template>
 

@@ -1,18 +1,18 @@
 @extends('layouts.app')
-@section('title', 'Walk-in Customers — Report')
+@section('title', __('Walk-in Customers — Report'))
 @section('content')
 <div class="flex justify-between items-center mb-4">
-    <h1 class="text-2xl font-bold">Walk-in Customers — Report</h1>
+    <h1 class="text-2xl font-bold">{{ __('Walk-in Customers — Report') }}</h1>
     <div class="flex gap-2">
         @include('reports._export_pdf')
-        <a href="{{ route('reports.customers') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back</a>
+        <a href="{{ route('reports.customers') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> {{ __('Back') }}</a>
     </div>
 </div>
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-    <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">Total Purchased (net of returns)</div><div class="text-2xl font-bold">{{ number_format($totalPurchased,2) }}</div></div>
-    <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">Total Due (Walk-in)</div><div class="text-2xl font-bold text-red-600">{{ number_format($totalDue,2) }}</div></div>
-    <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">Orders</div><div class="text-2xl font-bold">{{ $orders->total() }}</div></div>
-    <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">Total Returns (net of discount)</div><div class="text-2xl font-bold">{{ number_format($returns->sum('net_amount'),2) }}</div></div>
+    <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">{{ __('Total Purchased (net of returns)') }}</div><div class="text-2xl font-bold">{{ number_format($totalPurchased,2) }}</div></div>
+    <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">{{ __('Total Due (Walk-in)') }}</div><div class="text-2xl font-bold text-red-600">{{ number_format($totalDue,2) }}</div></div>
+    <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">{{ __('Orders') }}</div><div class="text-2xl font-bold">{{ $orders->total() }}</div></div>
+    <div class="bg-white p-5 rounded-xl shadow-sm"><div class="text-gray-500 text-sm">{{ __('Total Returns (net of discount)') }}</div><div class="text-2xl font-bold">{{ number_format($returns->sum('net_amount'),2) }}</div></div>
 </div>
 
 {{--
@@ -38,11 +38,11 @@
 --}}
 <div data-ajax-list="walk-in-orders">
 <div class="bg-white rounded-xl shadow-sm overflow-x-auto">
-<h2 class="font-semibold p-4 border-b">Walk-in Orders</h2>
+<h2 class="font-semibold p-4 border-b">{{ __('Walk-in Orders') }}</h2>
 <table class="w-full text-sm">
     <thead class="bg-gray-50 text-left"><tr>
         {{-- <th class="p-3"><input type="checkbox" data-bulk-select-all="walk-in-orders"></th> --}}
-        <th class="p-3">Order #</th><th class="p-3">Date</th><th class="p-3">Items</th><th class="p-3">Total</th><th class="p-3">Status</th><th class="p-3">Ledger</th>
+        <th class="p-3">{{ __('Order #') }}</th><th class="p-3">{{ __('Date') }}</th><th class="p-3">{{ __('Items') }}</th><th class="p-3">{{ __('Total') }}</th><th class="p-3">{{ __('Status') }}</th><th class="p-3">{{ __('Ledger') }}</th>
         {{-- <th class="p-3">Actions</th> --}}
     </tr></thead>
     <tbody>
@@ -56,9 +56,9 @@
             <td class="p-3">
                 @if($o->status === 'completed')
                     @if($o->due_amount > 0)
-                        <span class="text-amber-600 font-medium">Pending</span>
+                        <span class="text-amber-600 font-medium">{{ __('Pending') }}</span>
                     @else
-                        <span class="text-green-700 font-medium">Cleared</span>
+                        <span class="text-green-700 font-medium">{{ __('Cleared') }}</span>
                     @endif
                 @else
                     {{ ucfirst($o->status) }}
@@ -66,7 +66,7 @@
             </td>
             <td class="p-3">
                 @if($o->status === 'completed')
-                    <a href="{{ route('orders.ledger', $o) }}" class="btn btn-gray {{ $o->due_amount > 0 ? '' : 'opacity-70' }}">{{ $o->due_amount > 0 ? 'Record Payment' : 'Ledger' }}</a>
+                    <a href="{{ route('orders.ledger', $o) }}" class="btn btn-gray {{ $o->due_amount > 0 ? '' : 'opacity-70' }}">{{ $o->due_amount > 0 ? __('Record Payment') : __('Ledger') }}</a>
                 @endif
             </td>
             {{--
@@ -78,7 +78,7 @@
             --}}
         </tr>
     @empty
-        <tr><td class="p-3 text-gray-400" colspan="6">No walk-in orders yet.</td></tr>
+        <tr><td class="p-3 text-gray-400" colspan="6">{{ __('No walk-in orders yet.') }}</td></tr>
     @endforelse
     </tbody>
 </table>
@@ -88,7 +88,7 @@
 
 @if($returns->count())
 <div class="bg-white rounded-xl shadow-sm overflow-x-auto mt-6">
-<h2 class="font-semibold p-4 border-b">Returns from Walk-in Customers</h2>
+<h2 class="font-semibold p-4 border-b">{{ __('Returns from Walk-in Customers') }}</h2>
 {{--
 @if(auth()->user()->role === 'admin')
 <div class="flex items-center gap-2 px-4 pt-3 print:hidden">
@@ -104,7 +104,7 @@
 <table class="w-full text-sm">
     <thead class="bg-gray-50 text-left"><tr>
         {{-- <th class="p-3"><input type="checkbox" data-bulk-select-all="walk-in-returns"></th> --}}
-        <th class="p-3">Date</th><th class="p-3">Product</th><th class="p-3">Qty</th><th class="p-3">Unit Price</th><th class="p-3">Discount</th><th class="p-3">Net Value</th><th class="p-3">Reason</th>
+        <th class="p-3">{{ __('Date') }}</th><th class="p-3">{{ __('Product') }}</th><th class="p-3">{{ __('Qty') }}</th><th class="p-3">{{ __('Unit Price') }}</th><th class="p-3">{{ __('Discount') }}</th><th class="p-3">{{ __('Net Value') }}</th><th class="p-3">{{ __('Reason') }}</th>
         {{-- <th class="p-3">Actions</th> --}}
     </tr></thead>
     <tbody>

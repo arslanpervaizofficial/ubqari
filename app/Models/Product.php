@@ -25,6 +25,14 @@ class Product extends Model
         return $this->hasMany(ProductPriceHistory::class);
     }
 
+    /** v3.0 FEATURE 1 (Expiry + Batch Tracking): received batches for
+     *  this product, earliest-expiry-first. product.stock stays the
+     *  authority — batches are its breakdown, not a second ledger. */
+    public function batches()
+    {
+        return $this->hasMany(ProductBatch::class);
+    }
+
     public function isLowStock(): bool
     {
         return $this->min_stock !== null && $this->stock <= $this->min_stock;

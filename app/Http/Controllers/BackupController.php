@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\BackupService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -11,72 +12,36 @@ use Illuminate\Support\Str;
 
 class BackupController extends Controller
 {
-    /**
-     * Every application data table that participates in backup/restore, in
-     * an order that's safe to insert in (parents before the children that
-     * reference them). Framework-internal tables (sessions, cache, jobs,
-     * migrations, password_reset_tokens) are deliberately excluded —
-     * restoring those would fight the running app instead of restoring
-     * business data.
-     */
-    private const TABLES = [
-        'users',
-        'products',
-        'product_price_histories',
-        'customers',
-        'suppliers',
-        // v2.2 (F9): PO drafts were never backed up, restored or
-        // reset, so stale drafts survived a restore/reset and the PO
-        // create page auto-restored them. Drafts sit after their
-        // parents (users, suppliers) so inserts stay in safe order.
-        // reset() deletes every table in this list, so drafts are
-        // wiped by reset automatically. Range backups scope drafts by
-        // created_at (the default branch in rangeRows()).
-        'purchase_order_drafts',
-        'orders',
-        'order_items',
-        // FIXED (v2, H18): order_payments used to be missing from this
-        // list, so a "full" backup silently dropped the whole order
-        // ledger (walk-in order payments) and a restore left the old
-        // order_payments rows sitting against restored orders whose
-        // paid/due amounts no longer matched them. It is scoped through
-        // its parent order in rangeRows() below, like order_items.
-        'order_payments',
-        'purchase_orders',
-        'purchase_order_items',
-        'stock_movements',
-        'customer_payments',
-        'stock_returns',
-        'expenses',
-        'cash_parties',
-        'cash_transactions',
-        // FIXED (v2, H18): app_settings was also missing, even though
-        // reset() deletes it — so a full restore never brought settings
-        // back. It has no foreign keys, so it sits last in insert order.
-        'app_settings',
-    ];
-
-    /** Reference/master data — always exported in full, even for a
-     *  date-range backup, since the transactional rows in that range point
-     *  back to these records (a purchase order needs its supplier to exist,
-     *  an order needs its customer/cashier, etc). cash_parties is the same
-     *  situation for cash_transactions as customers/suppliers are for
-     *  orders/purchase orders. */
-    private const MASTER_TABLES = ['users', 'products', 'customers', 'suppliers', 'cash_parties'];
+    // The backup table list lives in App\Services\BackupService::TABLES
+    // (and ::MASTER_TABLES) — single source of truth shared with the
+    // scheduled backup command, so a manual download and a scheduled
+    // file can never drift apart. See BackupService for the list and
+    // the reasons each table is (or is not) in it.
 
     public function index()
     {
-        return view('backup.index');
+        $service = app(BackupService::class);
+
+        return view('backup.index', [
+            'scheduledBackups' => $service->listScheduledBackups(),
+            'latestScheduledBackup' => $service->latestScheduledBackup(),
+        ]);
     }
 
     /** Streams a JSON backup file — either every row in every table
      *  (?type=full), or master data in full plus transactional rows scoped
-     *  to a date range (?type=range&from=&to=). */
+     *  to a date range (?type=range&from=&to=).
+     *
+     *  Feature 7: the payload is built by BackupService — the same code
+     *  path the scheduled command uses — so a manual download and a
+     *  scheduled file are the same export. Filenames, JSON flags and
+     *  response headers below are unchanged from before. */
     public function download(Request $request)
     {
         $type = $request->input('type') === 'range' ? 'range' : 'full';
 
-        $from = $to = null;
+        $service = app(BackupService::class);
+
         if ($type === 'range') {
             $request->validate([
                 'from' => ['required', 'date'],
@@ -84,72 +49,20 @@ class BackupController extends Controller
             ]);
             $from = $request->date('from')->startOfDay();
             $to = $request->date('to')->endOfDay();
-        }
 
-        $tables = [];
-        foreach (self::TABLES as $table) {
-            if ($type === 'range' && !in_array($table, self::MASTER_TABLES, true)) {
-                $tables[$table] = $this->rangeRows($table, $from, $to);
-            } else {
-                $tables[$table] = DB::table($table)->get()->map(fn ($row) => (array) $row)->all();
-            }
-        }
-
-        $meta = [
-            'app' => 'Ubqari POS',
-            'type' => $type,
-            'generated_at' => now()->toDateTimeString(),
-        ];
-
-        if ($type === 'range') {
-            $meta['from'] = $from->toDateString();
-            $meta['to'] = $to->toDateString();
-            $filename = "ubqari-pos-backup-{$meta['from']}_to_{$meta['to']}.json";
+            $payload = $service->rangeExport($from, $to);
+            $filename = "ubqari-pos-backup-{$payload['meta']['from']}_to_{$payload['meta']['to']}.json";
         } else {
+            $payload = $service->fullExport();
             $filename = 'ubqari-pos-backup-full-' . now()->format('Y-m-d_His') . '.json';
         }
 
-        $json = json_encode(['meta' => $meta, 'tables' => $tables], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 
         return response($json, 200, [
             'Content-Type' => 'application/json',
             'Content-Disposition' => "attachment; filename=\"{$filename}\"",
         ]);
-    }
-
-    /** Rows for a transactional table that fall within [from, to], scoped by
-     *  the table's own created_at — except the two line-item tables, which
-     *  have no date of their own and are scoped through their parent
-     *  order/purchase-order instead. */
-    private function rangeRows(string $table, $from, $to): array
-    {
-        $query = match ($table) {
-            'order_items' => DB::table('order_items')->whereIn(
-                'order_id',
-                DB::table('orders')->whereBetween('created_at', [$from, $to])->pluck('id')
-            ),
-            // FIXED (v2, H18): order ledger rows have no date of their
-            // own, so like order_items they are scoped through their
-            // parent order's created_at.
-            'order_payments' => DB::table('order_payments')->whereIn(
-                'order_id',
-                DB::table('orders')->whereBetween('created_at', [$from, $to])->pluck('id')
-            ),
-            'purchase_order_items' => DB::table('purchase_order_items')->whereIn(
-                'purchase_order_id',
-                DB::table('purchase_orders')->whereBetween('created_at', [$from, $to])->pluck('id')
-            ),
-            // These two have their own business date, separate from
-            // created_at (an expense/cash entry can be logged today for an
-            // earlier date) — scope by that instead, same reasoning as
-            // orders/purchase orders using created_at being the wrong
-            // column for line items above.
-            'expenses' => DB::table('expenses')->whereBetween('expense_date', [$from, $to]),
-            'cash_transactions' => DB::table('cash_transactions')->whereBetween('transaction_date', [$from, $to]),
-            default => DB::table($table)->whereBetween('created_at', [$from, $to]),
-        };
-
-        return $query->get()->map(fn ($row) => (array) $row)->all();
     }
 
     /** For a range restore: the ids of master rows that the range's own
@@ -227,7 +140,7 @@ class BackupController extends Controller
 
         // Only ever touch tables we recognise — never let an uploaded file
         // dictate arbitrary table names.
-        $tables = array_intersect_key($data['tables'], array_flip(self::TABLES));
+        $tables = array_intersect_key($data['tables'], array_flip(BackupService::TABLES));
 
         // FIXED (v2, H19): for range restores, work out once which
         // master rows the range's transactional rows actually point at
@@ -239,7 +152,7 @@ class BackupController extends Controller
         try {
             DB::statement('SET FOREIGN_KEY_CHECKS=0');
 
-            foreach (self::TABLES as $table) {
+            foreach (BackupService::TABLES as $table) {
                 if (!array_key_exists($table, $tables) || !is_array($tables[$table])) {
                     continue;
                 }
@@ -366,7 +279,7 @@ class BackupController extends Controller
             // participates in the transaction properly: either every table
             // below is cleared and the fresh admin account is inserted
             // together, or none of it is.
-            foreach (self::TABLES as $table) {
+            foreach (BackupService::TABLES as $table) {
                 DB::table($table)->delete();
             }
             DB::table('app_settings')->delete();

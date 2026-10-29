@@ -1,10 +1,10 @@
 @extends('layouts.app')
-@section('title', 'Price History')
+@section('title', __('Price History'))
 @section('content')
-<h1 class="text-2xl font-bold mb-4">Price History — {{ $product->name }}</h1>
+<h1 class="text-2xl font-bold mb-4">{{ __('Price History —') }} {{ $product->name }}</h1>
 <div class="bg-white rounded-xl shadow-sm overflow-x-auto">
 <table class="w-full text-sm">
-    <thead class="bg-gray-50 text-left"><tr><th class="p-3">Date</th><th class="p-3">Old Price</th><th class="p-3">New Price</th><th class="p-3">Changed By</th></tr></thead>
+    <thead class="bg-gray-50 text-left"><tr><th class="p-3">{{ __('Date') }}</th><th class="p-3">{{ __('Old Price') }}</th><th class="p-3">{{ __('New Price') }}</th><th class="p-3">{{ __('Changed By') }}</th></tr></thead>
     <tbody>
     @foreach($history as $h)
         <tr class="border-t">

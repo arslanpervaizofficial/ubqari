@@ -17,6 +17,13 @@ use App\Http\Controllers\SupplierController;
 use App\Http\Controllers\StockReturnController;
 use App\Http\Controllers\TrashController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\ReportExportController;
+use App\Http\Controllers\AccountingController;
+use App\Http\Controllers\AgingController;
+use App\Http\Controllers\AuditLogController;
+use App\Http\Controllers\OnlinePaymentController;
+use App\Http\Controllers\SmsLogController;
+use App\Http\Controllers\StockCountController;
 use Illuminate\Support\Facades\Route;
 
 // ---------- Guest ----------
@@ -29,9 +36,31 @@ Route::middleware('guest')->group(function () {
 
 Route::get('/', fn () => redirect()->route('pos.index'));
 
+// v3.0 FEATURE 9 — online payment callbacks: OUTSIDE every middleware group.
+// Gateways post server-to-server with no shop session, so these must not sit
+// behind 'auth', and they are CSRF-exempt in bootstrap/app.php.
+Route::post('online-payments/callback/jazzcash', [OnlinePaymentController::class, 'jazzcashCallback'])
+    ->name('online-payments.callback.jazzcash');
+Route::post('online-payments/callback/easypaisa', [OnlinePaymentController::class, 'easypaisaCallback'])
+    ->name('online-payments.callback.easypaisa');
+
 // ---------- Authenticated ----------
 Route::middleware('auth')->group(function () {
     Route::post('/logout', [LoginController::class, 'logout'])->name('logout');
+    // Carry-over from the separate logout 405 patch (v2.2 era): GET /logout
+    // bhi logout kar de, warna v3.0 install karne par 405 wapas aa jata.
+    // GET route ka naam nahi rakha taake route('logout') POST wali hi rahe.
+    Route::get('/logout', [LoginController::class, 'logout']);
+
+    // v3.0 FEATURE 8 — locale switch (EN | اردو toggle in the layout).
+    // GET that only writes session('locale'); accepts en/ur only.
+    Route::get('/locale/{locale}', function (string $locale) {
+        if (in_array($locale, ['en', 'ur'], true)) {
+            session(['locale' => $locale]);
+        }
+
+        return redirect()->back();
+    })->name('locale.switch');
     // H28: the dashboard shows whole-business sales, so it is no longer
     // auth-only — hiding the sidebar link was never access control.
     Route::middleware('role:admin,manager')->get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
@@ -154,7 +183,54 @@ Route::middleware('auth')->group(function () {
         Route::get('trash', [TrashController::class, 'index'])->name('trash.index');
         Route::post('trash/{type}/restore', [TrashController::class, 'restore'])->name('trash.restore');
         Route::post('trash/{type}/restore-all', [TrashController::class, 'restoreAll'])->name('trash.restore-all');
+        // v3.0 FEATURE 2 — Physical Stock Counting (admin/manager; 'create'
+        // must stay before the {stockCount} wildcard).
+        Route::get('stock-counts', [StockCountController::class, 'index'])->name('stock-counts.index');
+        Route::get('stock-counts/create', [StockCountController::class, 'create'])->name('stock-counts.create');
+        Route::post('stock-counts', [StockCountController::class, 'store'])->name('stock-counts.store');
+        Route::get('stock-counts/{stockCount}', [StockCountController::class, 'show'])->name('stock-counts.show');
+        Route::get('stock-counts/{stockCount}/edit', [StockCountController::class, 'edit'])->name('stock-counts.edit');
+        Route::patch('stock-counts/{stockCount}', [StockCountController::class, 'update'])->name('stock-counts.update');
+        Route::post('stock-counts/{stockCount}/approve', [StockCountController::class, 'approve'])->name('stock-counts.approve');
+
+        // v3.0 FEATURE 3 — Customer Aging (read-only report).
+        Route::get('aging', [AgingController::class, 'index'])->name('aging.index');
+        Route::get('aging/{customer}', [AgingController::class, 'show'])->name('aging.show');
+
+        // v3.0 FEATURE 4 — Audit Log (read-only).
+        Route::get('audit-logs', [AuditLogController::class, 'index'])->name('audit-logs.index');
+
+        // v3.0 FEATURE 5 — SMS (manual only): reminder button + log/send form.
+        Route::post('customers/{customer}/sms-reminder', [CustomerController::class, 'sendReminder'])->name('customers.sms-reminder');
+        Route::get('sms-logs', [SmsLogController::class, 'index'])->name('sms-logs.index');
+        Route::post('sms-logs', [SmsLogController::class, 'store'])->name('sms-logs.store');
+
+        // v3.0 FEATURE 8 — CSV exports (same gate as the report pages).
+        Route::get('reports/export/capital', [ReportExportController::class, 'capital'])->name('reports.export.capital');
+        Route::get('reports/export/customers', [ReportExportController::class, 'customers'])->name('reports.export.customers');
+        Route::get('reports/export/stock', [ReportExportController::class, 'stock'])->name('reports.export.stock');
+        Route::get('reports/export/purchases', [ReportExportController::class, 'purchases'])->name('reports.export.purchases');
+        Route::get('reports/export/cash-reconciliation', [ReportExportController::class, 'cashReconciliation'])->name('reports.export.cash-reconciliation');
     });
+
+    // v3.0 FEATURE 6 — Full Accounting (journal / P&L / Balance Sheet).
+    Route::middleware('role:admin,manager')->group(function () {
+        Route::get('accounting/journal', [AccountingController::class, 'index'])->name('accounting.journal');
+        Route::get('accounting/profit-loss', [AccountingController::class, 'profitLoss'])->name('accounting.profit-loss');
+        Route::get('accounting/balance-sheet', [AccountingController::class, 'balanceSheet'])->name('accounting.balance-sheet');
+    });
+    Route::middleware('role:admin')->group(function () {
+        Route::get('accounting/opening-balance', [AccountingController::class, 'openingBalance'])->name('accounting.opening-balance');
+        Route::post('accounting/opening-balance', [AccountingController::class, 'storeOpeningBalance'])->name('accounting.opening-balance.store');
+    });
+
+    // v3.0 FEATURE 9 — online payment initiate: inside 'auth' but OUTSIDE the
+    // admin/manager group, so the controller's own "admin/manager OR the
+    // order's cashier" check can work. The ledger page itself stays
+    // admin/manager-only (unchanged), so a cashier only reaches this
+    // button if they can reach the ledger page.
+    Route::post('orders/{order}/pay-online', [OrderController::class, 'initiateOnlinePayment'])
+        ->name('orders.initiate-online-payment');
 
     // Admin only — every action that removes data, either by moving it to
     // Trash (soft delete/"disable") or permanently deleting it from Trash.
@@ -208,6 +284,10 @@ Route::middleware('auth')->group(function () {
         Route::post('users/{user}/toggle-active', [UserController::class, 'toggleActive'])->name('users.toggle-active');
         Route::post('users/destroy-selected', [UserController::class, 'destroySelected'])->name('users.destroy-selected');
         Route::post('users/destroy-all', [UserController::class, 'destroyAll'])->name('users.destroy-all');
+
+        // v3.0 FEATURE 2 — deleting an OPEN stock count only (approved
+        // counts are refused in the controller; items cascade).
+        Route::delete('stock-counts/{stockCount}', [StockCountController::class, 'destroy'])->name('stock-counts.destroy');
 
         Route::get('settings', [SettingController::class, 'edit'])->name('settings.edit');
         Route::put('settings', [SettingController::class, 'update'])->name('settings.update');

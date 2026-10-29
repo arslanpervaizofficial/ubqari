@@ -1,25 +1,29 @@
 @extends('layouts.app')
-@section('title', 'Receive Purchase Order')
+@section('title', __('Receive Purchase Order'))
 @section('content')
-<h1 class="text-2xl font-bold mb-1">Receive PO #{{ $purchaseOrder->id }}</h1>
-<p class="text-sm text-gray-500 mb-4">Supplier: {{ $purchaseOrder->supplier->name ?? '— (deleted supplier)' }}</p>
+<h1 class="text-2xl font-bold mb-1">{{ __('Receive PO #') }}{{ $purchaseOrder->id }}</h1>
+<p class="text-sm text-gray-500 mb-4">{{ __('Supplier') }}: {{ $purchaseOrder->supplier->name ?? __('— (deleted supplier)') }}</p>
 
 <div class="mb-4 bg-blue-50 text-blue-800 text-sm px-4 py-2 rounded-lg">
-    Ordered quantity is pre-filled below — edit it if the supplier actually delivered more or less, then confirm. Stock is updated using what you enter here, not the original order quantity.
+    {{ __('Ordered quantity is pre-filled below — edit it if the supplier actually delivered more or less, then confirm. Stock is updated using what you enter here, not the original order quantity.') }}
 </div>
 
-<form method="POST" action="{{ route('purchase-orders.receive', $purchaseOrder) }}" novalidate class="bg-white p-6 rounded-xl shadow-sm w-full confirm-submit" data-confirm-message="Confirm receiving this PO? Stock will be updated with the quantities entered below.">
+<p class="text-sm text-gray-500 mb-4">{{ __('Batch No and Expiry Date are optional: leave Batch No blank and one is generated automatically (PO-{PO id}-L{line}); leave Expiry blank for stock with no expiry.') }}</p>
+
+<form method="POST" action="{{ route('purchase-orders.receive', $purchaseOrder) }}" novalidate class="bg-white p-6 rounded-xl shadow-sm w-full confirm-submit" data-confirm-message="{{ __('Confirm receiving this PO? Stock will be updated with the quantities entered below.') }}">
     @csrf
 
     <div class="overflow-x-auto">
     <table class="w-full text-sm mb-4">
         <thead class="text-left text-gray-500">
             <tr>
-                <th class="py-2 pr-4">Product</th>
-                <th class="px-4">Current Stock</th>
-                <th class="px-4">Ordered Qty</th>
-                <th class="px-4">Received Qty</th>
-                <th class="px-4">New Stock</th>
+                <th class="py-2 pr-4">{{ __('Product') }}</th>
+                <th class="px-4">{{ __('Current Stock') }}</th>
+                <th class="px-4">{{ __('Ordered Qty') }}</th>
+                <th class="px-4">{{ __('Received Qty') }}</th>
+                <th class="px-4">{{ __('Batch No (optional)') }}</th>
+                <th class="px-4">{{ __('Expiry Date (optional)') }}</th>
+                <th class="px-4">{{ __('New Stock') }}</th>
             </tr>
         </thead>
         <tbody>
@@ -33,6 +37,16 @@
                            name="items[{{ $item->id }}][received_quantity]" value="{{ $item->quantity }}"
                            class="po-received border rounded px-2 py-1 w-28" data-current-stock="{{ $item->product->stock }}" data-unit="{{ $item->product->unit }}">
                 </td>
+                <td class="px-4">
+                    <input type="text" maxlength="255" placeholder="{{ __('Auto if blank') }}"
+                           name="items[{{ $item->id }}][batch_no]"
+                           class="border rounded px-2 py-1 w-32">
+                </td>
+                <td class="px-4">
+                    <input type="date"
+                           name="items[{{ $item->id }}][expiry_date]"
+                           class="border rounded px-2 py-1">
+                </td>
                 <td class="px-4 po-new-stock font-medium text-green-700">{{ $item->product->stock + $item->quantity }} {{ $item->product->unit }}</td>
             </tr>
         @endforeach
@@ -43,12 +57,12 @@
     {{-- H12b: receiving more than ordered is rejected unless this is ticked. --}}
     <label class="flex items-center gap-2 text-sm text-gray-600 mb-4">
         <input type="checkbox" name="allow_over_receive" value="1">
-        Over-shipment allow karein (kisi line ki received quantity ordered se zyada ho to bhi accept karein)
+        {{ __('Over-shipment allow karein (kisi line ki received quantity ordered se zyada ho to bhi accept karein)') }}
     </label>
 
     <div class="flex justify-end gap-2">
-        <a href="{{ route('purchase-orders.index') }}" class="btn btn-gray">Cancel</a>
-        <button class="btn btn-solid-green">Confirm Received</button>
+        <a href="{{ route('purchase-orders.index') }}" class="btn btn-gray">{{ __('Cancel') }}</a>
+        <button class="btn btn-solid-green">{{ __('Confirm Received') }}</button>
     </div>
 </form>
 

@@ -5,9 +5,11 @@ namespace App\Http\Controllers;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
+use App\Models\ProductBatch;
 use App\Models\Customer;
 use App\Models\StockReturn;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class DashboardController extends Controller
 {
@@ -97,10 +99,18 @@ class DashboardController extends Controller
             ->take(5)
             ->values();
 
+        // v3.0 FEATURE 1 — batches expiring in the next 30 days (the
+        // scope also includes already-expired batches with stock left:
+        // they are the most urgent rows). No other dashboard figure is
+        // touched. Guarded so a not-yet-migrated install keeps working.
+        $expiringBatches = Schema::hasTable('product_batches')
+            ? ProductBatch::with('product')->expiringSoon()->fifo()->get()
+            : collect();
+
         return view('dashboard', compact(
             'todaySales', 'monthSales', 'lowStock', 'outOfStock',
             'heldOrdersCount', 'totalProducts', 'totalCustomers', 'last7Days',
-            'topParties', 'topProducts'
+            'topParties', 'topProducts', 'expiringBatches'
         ));
     }
 }

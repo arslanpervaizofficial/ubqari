@@ -1,11 +1,11 @@
 @extends('layouts.app')
-@section('title', 'New Purchase Order')
+@section('title', __('New Purchase Order'))
 @section('content')
-<h1 class="text-2xl font-bold mb-4">New Purchase Order</h1>
+<h1 class="text-2xl font-bold mb-4">{{ __('New Purchase Order') }}</h1>
 
 @if(count($preselectedLines))
 <div class="mb-4 bg-blue-50 text-blue-800 text-sm px-4 py-2 rounded-lg print:hidden">
-    Pre-filled from your stock alert — adjust quantity/price as needed, then create the order.
+    {{ __('Pre-filled from your stock alert — adjust quantity/price as needed, then create the order.') }}
 </div>
 @endif
 
@@ -14,41 +14,40 @@
     <div class="flex justify-between mb-4">
         <div>
             <h1 class="text-xl font-bold">{{ \App\Models\AppSetting::current()->print_title }}</h1>
-            <p class="text-sm text-gray-500">PURCHASE ORDER — ESTIMATE</p>
+            <p class="text-sm text-gray-500">{{ __('PURCHASE ORDER — ESTIMATE') }}</p>
         </div>
         <div class="text-right text-sm">
-            <div>Date: <span id="po-print-date"></span></div>
+            <div>{{ __('Date') }}: <span id="po-print-date"></span></div>
         </div>
     </div>
-    <p class="mb-2 text-sm">Supplier: <span id="po-print-supplier"></span></p>
+    <p class="mb-2 text-sm">{{ __('Supplier') }}: <span id="po-print-supplier"></span></p>
     <table class="w-full text-sm mb-4">
-        <thead class="border-b text-left"><tr><th class="py-1">Product</th><th>Qty</th><th>Cost</th><th>Disc</th><th>Line Total</th></tr></thead>
+        <thead class="border-b text-left"><tr><th class="py-1">{{ __('Product') }}</th><th>{{ __('Qty') }}</th><th>{{ __('Cost') }}</th><th>{{ __('Disc') }}</th><th>{{ __('Line Total') }}</th></tr></thead>
         <tbody id="po-print-items"></tbody>
     </table>
     <div class="text-right text-sm space-y-1">
-        <div>Subtotal: <span id="po-print-subtotal"></span></div>
-        <div>Overall Discount (<span id="po-print-discount-pct"></span>%): -<span id="po-print-discount"></span></div>
-        <div class="font-bold text-lg">Estimated Total: <span id="po-print-total"></span></div>
+        <div>{{ __('Subtotal') }}: <span id="po-print-subtotal"></span></div>
+        <div>{{ __('Overall Discount (') }}<span id="po-print-discount-pct"></span>%): -<span id="po-print-discount"></span></div>
+        <div class="font-bold text-lg">{{ __('Estimated Total') }}: <span id="po-print-total"></span></div>
     </div>
-    <p class="text-xs text-gray-400 mt-4">This is an estimate only, generated before saving — not a confirmed Purchase Order until "Create Purchase Order" is clicked.</p>
+    <p class="text-xs text-gray-400 mt-4">{{ __('This is an estimate only, generated before saving — not a confirmed Purchase Order until "Create Purchase Order" is clicked.') }}</p>
 </div>
 
 <!-- FIX 1 — session-expire warning (autosave keeps a browser copy, so a
      logout can no longer wipe typed data; this banner only appears
      when the server session actually expired mid-typing) -->
 <div id="session-warning" class="mb-4 bg-yellow-100 text-yellow-800 text-sm px-4 py-2 rounded-lg" style="display:none;">
-    Session expire ho gai hai. Ghabrayein nahi — aapka data is browser me save hai.
-    Dobara login karein, phir <strong>Restore Draft</strong> dabayen.
+    {{ __('Session expire ho gai hai. Ghabrayein nahi — aapka data is browser me save hai. Dobara login karein, phir') }} <strong>{{ __('Restore Draft') }}</strong> dabayen.
 </div>
 <div id="restore-banner" class="mb-4 bg-blue-50 text-blue-800 text-sm px-4 py-2 rounded-lg" style="display:none;">
-    Pichla draft is browser se restore kar diya gaya hai. Check kar ke <strong>Save Draft</strong> ya <strong>Create Purchase Order</strong> dabayen.
+    {{ __('Pichla draft is browser se restore kar diya gaya hai. Check kar ke') }} <strong>{{ __('Save Draft') }}</strong> ya <strong>{{ __('Create Purchase Order') }}</strong> dabayen.
 </div>
 
 <form id="po-form" method="POST" action="{{ route('purchase-orders.store') }}" novalidate class="bg-white p-6 rounded-xl shadow-sm w-full print:hidden">
     @csrf
     <input type="hidden" name="draft_id" id="draft_id" value="{{ old('draft_id', $draft->id ?? '') }}">
     <div class="mb-4 max-w-sm">
-        <label class="block text-sm text-gray-600 mb-1">Supplier</label>
+        <label class="block text-sm text-gray-600 mb-1">{{ __('Supplier') }}</label>
         <select name="supplier_id" required data-label="Supplier" class="w-full border rounded px-3 py-2">
             @foreach($suppliers as $s)<option value="{{ $s->id }}">{{ $s->name }}</option>@endforeach
         </select>
@@ -59,53 +58,53 @@
         <thead class="text-left text-gray-500">
             <tr>
                 <th class="py-1 pr-2">#</th><!-- FIX 3: index number -->
-                <th class="py-1 pr-4">Product</th>
-                <th class="px-4">Remaining Stock</th>
-                <th class="px-4">Quantity</th>
-                <th class="px-4">New Stock</th>
-                <th class="px-4">Cost Price</th>
-                <th class="px-4">Disc %<br><span class="text-xs text-gray-400 normal-case">(supplier gives us)</span></th>
-                <th class="px-4">Max Discount %<br><span class="text-xs text-gray-400 normal-case">(billing limit — updates product)</span></th>
-                <th class="px-4">Line Total</th>
+                <th class="py-1 pr-4">{{ __('Product') }}</th>
+                <th class="px-4">{{ __('Remaining Stock') }}</th>
+                <th class="px-4">{{ __('Quantity') }}</th>
+                <th class="px-4">{{ __('New Stock') }}</th>
+                <th class="px-4">{{ __('Cost Price') }}</th>
+                <th class="px-4">{{ __('Disc %') }}<br><span class="text-xs text-gray-400 normal-case">{{ __('(supplier gives us)') }}</span></th>
+                <th class="px-4">{{ __('Max Discount %') }}<br><span class="text-xs text-gray-400 normal-case">{{ __('(billing limit — updates product)') }}</span></th>
+                <th class="px-4">{{ __('Line Total') }}</th>
                 <th></th>
             </tr>
         </thead>
         <tbody id="po-items"></tbody>
     </table>
     </div>
-    <button type="button" id="add-line" class="text-sm text-blue-600 mb-4">+ Add another product</button>
+    <button type="button" id="add-line" class="text-sm text-blue-600 mb-4">+ {{ __('Add another product') }}</button>
 
     <!-- FIX 3: live totals — lines added + sum of all quantities -->
     <div id="po-totals-summary" class="mb-4 text-sm text-gray-600">
-        Total Products: <strong id="po-total-products">0</strong>
+        {{ __('Total Products') }}: <strong id="po-total-products">0</strong>
         &nbsp;·&nbsp; Total Quantity: <strong id="po-total-qty">0</strong>
     </div>
 
     <div class="border-t pt-4 flex flex-col items-end gap-3">
         <div class="flex items-center gap-2">
-            <label class="text-sm text-gray-600">Overall Discount % <span class="text-gray-400">(special/company discount on whole order)</span></label>
+            <label class="text-sm text-gray-600">{{ __('Overall Discount %') }} <span class="text-gray-400">{{ __('(special/company discount on whole order)') }}</span></label>
             <input type="number" step="0.01" min="0" max="100" id="po-overall-discount" name="discount_percent" value="0"
                    class="border rounded px-3 py-2 w-24 text-right">
         </div>
         <div class="text-right text-sm text-gray-500">
-            Subtotal: <span id="po-subtotal">0.00</span>
+            {{ __('Subtotal') }}: <span id="po-subtotal">0.00</span>
             &nbsp;·&nbsp; Discount: -<span id="po-discount-amount">0.00</span>
         </div>
         <div class="text-right">
-            <div class="text-gray-500 text-sm">Estimated Order Total</div>
+            <div class="text-gray-500 text-sm">{{ __('Estimated Order Total') }}</div>
             <div class="text-2xl font-bold" id="po-total">0.00</div>
         </div>
     </div>
 
     <div class="mt-4 flex gap-2">
-        <button class="btn btn-dark" id="po-create-btn">Create Purchase Order</button>
+        <button class="btn btn-dark" id="po-create-btn">{{ __('Create Purchase Order') }}</button>
         <!-- FIX 1: temporary save only — NO final order, NO stock change -->
-        <button type="button" id="po-save-draft" class="btn btn-gray">Save Draft</button>
-        <button type="button" id="po-restore-draft" class="btn btn-gray">Restore Draft</button>
+        <button type="button" id="po-save-draft" class="btn btn-gray">{{ __('Save Draft') }}</button>
+        <button type="button" id="po-restore-draft" class="btn btn-gray">{{ __('Restore Draft') }}</button>
         <span id="draft-status" class="text-sm text-gray-500 self-center"></span>
         <button type="button" id="po-print-btn" class="btn btn-gray">
             <svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m0-10V5a2 2 0 012-2h6a2 2 0 012 2v2m-10 0h10m-10 5h.01M7 17h10v4H7v-4z"/></svg>
-            Print Estimate
+            {{ __('Print Estimate') }}
         </button>
     </div>
 </form>

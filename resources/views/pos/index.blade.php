@@ -1,25 +1,25 @@
 @extends('layouts.app')
-@section('title', 'POS Billing')
+@section('title', __('POS Billing'))
 @section('content')
 <div class="flex justify-between items-center mb-4 flex-wrap gap-3">
     <h1 class="text-xl font-bold">
-        Order: <span id="order-number">{{ $order->order_number }}</span>
+        {{ __('Order') }}: <span id="order-number">{{ $order->order_number }}</span>
         @if($order->original_completed_at)
-            <span class="ml-2 align-middle px-2 py-1 rounded text-xs bg-amber-100 text-amber-700">Editing completed order</span>
+            <span class="ml-2 align-middle px-2 py-1 rounded text-xs bg-amber-100 text-amber-700">{{ __('Editing completed order') }}</span>
         @endif
     </h1>
     <div class="flex items-center gap-2 flex-wrap">
         @if(in_array(auth()->user()->role, ['admin', 'manager']))
         <form method="POST" action="{{ route('pos.load-order') }}" class="flex items-center gap-1">
             @csrf
-            <input type="text" name="order_number" placeholder="Previous order # to edit" required data-label="Order number"
+            <input type="text" name="order_number" placeholder="{{ __('Previous order # to edit') }}" required data-label="Order number"
                    class="border rounded px-3 py-2 text-sm w-48">
-            <button class="btn btn-gray">Load Order</button>
+            <button class="btn btn-gray">{{ __('Load Order') }}</button>
         </form>
         @endif
-        <form method="POST" action="{{ route('pos.new') }}" class="inline confirm-submit" data-confirm-message="Start a new order? Current one will be held automatically if it has items.">
+        <form method="POST" action="{{ route('pos.new') }}" class="inline confirm-submit" data-confirm-message="{{ __('Start a new order? Current one will be held automatically if it has items.') }}">
             @csrf
-            <button class="btn btn-solid-blue">+ New Order</button>
+            <button class="btn btn-solid-blue">+ {{ __('New Order') }}</button>
         </form>
     </div>
 </div>
@@ -29,45 +29,45 @@
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
     <div class="lg:col-span-2 bg-white p-4 rounded-xl shadow-sm">
         <div class="flex gap-2 mb-3">
-            <input id="product-search" type="text" placeholder="Scan barcode or search product..."
+            <input id="product-search" type="text" placeholder="{{ __('Scan barcode or search product...') }}"
                    class="flex-1 border rounded px-3 py-2" autofocus>
         </div>
         <div id="search-results" class="mb-3 hidden bg-gray-50 border rounded max-h-56 overflow-y-auto"></div>
 
         <table class="w-full text-sm">
             <thead class="text-left border-b text-gray-500">
-                <tr><th class="py-2">#</th><th>Product</th><th>Qty</th><th>Price</th><th>Disc %</th><th>Line Total</th><th></th></tr>
+                <tr><th class="py-2">#</th><th>{{ __('Product') }}</th><th>{{ __('Qty') }}</th><th>{{ __('Price') }}</th><th>{{ __('Disc %') }}</th><th>{{ __('Line Total') }}</th><th></th></tr>
             </thead>
             <tbody id="cart-body"></tbody>
         </table>
-        <div class="text-right text-sm text-gray-500 mt-1" id="item-count-row">Total Items: <span id="item-count">0</span> product(s), <span id="unit-count">0</span> unit(s)</div>
+        <div class="text-right text-sm text-gray-500 mt-1" id="item-count-row">{{ __('Total Items') }}: <span id="item-count">0</span> product(s), <span id="unit-count">0</span> unit(s)</div>
 
         <div class="mt-4 border-t pt-4 flex flex-wrap justify-between items-end gap-4">
             <div class="flex gap-3">
                 <div>
-                    <label class="text-sm text-gray-600">Customer</label><br>
+                    <label class="text-sm text-gray-600">{{ __('Customer') }}</label><br>
                     <select id="customer-select" class="border rounded px-3 py-2">
-                        <option value="">Walk-in (no discount)</option>
+                        <option value="">{{ __('Walk-in (no discount)') }}</option>
                         @foreach($customers as $c)
                             <option value="{{ $c->id }}" @selected((int) $order->customer_id === (int) $c->id)>{{ $c->name }} ({{ $c->discount_percent }}%)</option>
                         @endforeach
                     </select>
                 </div>
                 <div>
-                    <label class="text-sm text-gray-600">Overall Discount %</label><br>
+                    <label class="text-sm text-gray-600">{{ __('Overall Discount %') }}</label><br>
                     <input type="number" step="0.01" id="overall-discount" value="{{ $order->discount_percent }}" class="border rounded px-3 py-2 w-24">
                 </div>
             </div>
             <div class="text-right">
-                <div class="text-sm">Subtotal: <span id="subtotal">{{ number_format($order->subtotal, 2) }}</span></div>
-                <div class="text-sm">Item Discounts: -<span id="line-discount">{{ number_format($order->line_discount_total, 2) }}</span></div>
-                <div class="text-sm">Overall Discount: -<span id="discount">{{ number_format($order->discount_amount, 2) }}</span></div>
-                <div class="text-xl font-bold mt-1">Total Bill Payment: <span id="total">{{ number_format($order->total, 2) }}</span></div>
+                <div class="text-sm">{{ __('Subtotal') }}: <span id="subtotal">{{ number_format($order->subtotal, 2) }}</span></div>
+                <div class="text-sm">{{ __('Item Discounts: -') }}<span id="line-discount">{{ number_format($order->line_discount_total, 2) }}</span></div>
+                <div class="text-sm">{{ __('Overall Discount: -') }}<span id="discount">{{ number_format($order->discount_amount, 2) }}</span></div>
+                <div class="text-xl font-bold mt-1">{{ __('Total Bill Payment') }}: <span id="total">{{ number_format($order->total, 2) }}</span></div>
                 <div class="text-sm mt-1 {{ $order->customer ? '' : 'hidden' }}" id="due-payment-row">
-                    Due Payment (previous balance): <span id="due-payment" class="{{ ($order->customer->credit_balance ?? 0) > 0 ? 'text-red-600 font-medium' : (($order->customer->credit_balance ?? 0) < 0 ? 'text-blue-700 font-medium' : '') }}">{{ number_format($order->customer->credit_balance ?? 0, 2) }}</span>
+                    {{ __('Due Payment (previous balance)') }}: <span id="due-payment" class="{{ ($order->customer->credit_balance ?? 0) > 0 ? 'text-red-600 font-medium' : (($order->customer->credit_balance ?? 0) < 0 ? 'text-blue-700 font-medium' : '') }}">{{ number_format($order->customer->credit_balance ?? 0, 2) }}</span>
                 </div>
                 <div class="text-lg font-bold mt-1 {{ $order->customer ? '' : 'hidden' }}" id="total-with-due-row">
-                    Total Payment with Due: <span id="total-with-due">{{ number_format($order->total + ($order->customer->credit_balance ?? 0), 2) }}</span>
+                    {{ __('Total Payment with Due') }}: <span id="total-with-due">{{ number_format($order->total + ($order->customer->credit_balance ?? 0), 2) }}</span>
                 </div>
             </div>
         </div>
@@ -75,28 +75,28 @@
         <div class="mt-4 flex gap-2 justify-end">
             <form method="POST" action="{{ route('pos.quotation', $order) }}">
                 @csrf
-                <button class="btn btn-gray">Save as Draft/Quotation</button>
+                <button class="btn btn-gray">{{ __('Save as Draft/Quotation') }}</button>
             </form>
-            <button id="checkout-btn" class="btn btn-solid-green">{{ $order->original_completed_at ? 'Update Order' : 'Complete Order' }}</button>
+            <button id="checkout-btn" class="btn btn-solid-green">{{ $order->original_completed_at ? __('Update Order') : __('Complete Order') }}</button>
         </div>
     </div>
 
     <div class="bg-white p-4 rounded-xl shadow-sm">
-        <h2 class="font-semibold mb-2">Held Orders ({{ $heldOrders->count() }})</h2>
+        <h2 class="font-semibold mb-2">{{ __('Held Orders (') }}{{ $heldOrders->count() }})</h2>
         <div class="space-y-2 max-h-96 overflow-y-auto">
             @forelse($heldOrders as $h)
                 <div class="border rounded-lg p-2 flex justify-between items-center text-sm hover:bg-gray-50 transition">
                     <a href="{{ route('pos.held-detail', $h) }}" class="flex-1">
                         <div class="font-medium">{{ $h->order_number }}</div>
-                        <div class="text-gray-500">{{ $h->customer->name ?? 'Walk-in' }} · {{ $h->items_count }} items</div>
+                        <div class="text-gray-500">{{ $h->customer->name ?? 'Walk-in' }} · {{ $h->items_count }} {{ __('items') }}</div>
                     </a>
                     <form method="POST" action="{{ route('pos.resume', $h) }}">
                         @csrf
-                        <button class="btn btn-solid-yellow">Resume</button>
+                        <button class="btn btn-solid-yellow">{{ __('Resume') }}</button>
                     </form>
                 </div>
             @empty
-                <p class="text-gray-400 text-sm">No held orders.</p>
+                <p class="text-gray-400 text-sm">{{ __('No held orders.') }}</p>
             @endforelse
         </div>
     </div>
@@ -104,18 +104,18 @@
 
 <div id="checkout-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center">
     <div class="bg-white rounded-xl p-6 w-full max-w-sm">
-        <h3 class="font-bold mb-3">{{ $order->original_completed_at ? 'Update Payment' : 'Complete Payment' }}</h3>
+        <h3 class="font-bold mb-3">{{ $order->original_completed_at ? __('Update Payment') : __('Complete Payment') }}</h3>
         <form id="checkout-form" method="POST" action="{{ route('pos.complete', $order) }}">
             @csrf
-            <label class="block text-sm mb-1">Payment Method</label>
+            <label class="block text-sm mb-1">{{ __('Payment Method') }}</label>
             <select name="payment_method" id="payment-method" class="w-full border rounded px-3 py-2 mb-3">
-                <option value="cash">Cash</option>
-                <option value="bank">Bank Transfer</option>
-                <option value="split">Split (Cash + Bank)</option>
+                <option value="cash">{{ __('Cash') }}</option>
+                <option value="bank">{{ __('Bank Transfer') }}</option>
+                <option value="split">{{ __('Split (Cash + Bank)') }}</option>
             </select>
 
             <div id="single-amount">
-                <label class="block text-sm mb-1">Amount Paid</label>
+                <label class="block text-sm mb-1">{{ __('Amount Paid') }}</label>
                 {{-- FIXED (M1): when editing a completed order, default to
                      the ORIGINAL paid amount, not the (possibly changed)
                      total — otherwise the customer's overpayment advance
@@ -125,21 +125,21 @@
                 <input type="number" step="0.01" name="paid_amount" class="w-full border rounded px-3 py-2 mb-3" value="{{ $order->original_completed_at ? ($order->paid_amount ?? $order->total) : $order->total }}">
             </div>
             <div id="split-amounts" class="hidden">
-                <label class="block text-sm mb-1">Cash Amount</label>
+                <label class="block text-sm mb-1">{{ __('Cash Amount') }}</label>
                 <input type="number" step="0.01" name="cash_amount" class="w-full border rounded px-3 py-2 mb-3">
-                <label class="block text-sm mb-1">Bank Amount</label>
+                <label class="block text-sm mb-1">{{ __('Bank Amount') }}</label>
                 <input type="number" step="0.01" name="bank_amount" class="w-full border rounded px-3 py-2 mb-3">
             </div>
             <div id="bank-details" class="hidden">
-                <label class="block text-sm mb-1">Bank Name</label>
-                <input name="bank_name" placeholder="e.g. HBL, Meezan Bank" class="w-full border rounded px-3 py-2 mb-3">
-                <label class="block text-sm mb-1">Transaction ID</label>
-                <input name="transaction_id" placeholder="e.g. TXN123456" class="w-full border rounded px-3 py-2 mb-3">
+                <label class="block text-sm mb-1">{{ __('Bank Name') }}</label>
+                <input name="bank_name" placeholder="{{ __('e.g. HBL, Meezan Bank') }}" class="w-full border rounded px-3 py-2 mb-3">
+                <label class="block text-sm mb-1">{{ __('Transaction ID') }}</label>
+                <input name="transaction_id" placeholder="{{ __('e.g. TXN123456') }}" class="w-full border rounded px-3 py-2 mb-3">
             </div>
 
             <div class="flex justify-end gap-2">
-                <button type="button" id="cancel-checkout" class="btn btn-gray">Cancel</button>
-                <button class="btn btn-solid-green">Confirm</button>
+                <button type="button" id="cancel-checkout" class="btn btn-gray">{{ __('Cancel') }}</button>
+                <button class="btn btn-solid-green">{{ __('Confirm') }}</button>
             </div>
         </form>
     </div>
