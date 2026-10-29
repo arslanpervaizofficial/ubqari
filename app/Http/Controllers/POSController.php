@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Customer;
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\OrderPayment;
 use App\Models\Product;
 use App\Models\StockMovement;
 use Illuminate\Http\Request;
@@ -101,7 +102,7 @@ class POSController extends Controller
         DB::transaction(function () use ($order, $request) {
             $currentId = $request->session()->get('current_order_id');
             if ($currentId && $currentId != $order->id) {
-                $current = Order::where('id', $currentId)->where('status', 'in_progress')->first();
+                $current = Order::where('id', $currentId)->when(!$this->isPrivileged(), fn ($q) => $q->where('user_id', auth()->id()))->where('status', 'in_progress')->first();
                 if ($current) {
                     $current->items()->count() > 0 ? $current->update(['status' => 'hold']) : $current->forceDelete();
                 }
@@ -121,7 +122,12 @@ class POSController extends Controller
         $orderId = $request->session()->get('current_order_id');
 
         if ($orderId) {
-            $order = Order::where('id', $orderId)->where('status', 'in_progress')->first();
+            // v2.2 (F3): a cashier's session cart belongs to its owner
+            // only — a session value pointing at another cashier's open
+            // cart must not be honoured as the current cart. Admins and
+            // managers are excepted: after "Load Order for Edit" their
+            // session legitimately points at another user's order.
+            $order = Order::where('id', $orderId)->when(!$this->isPrivileged(), fn ($q) => $q->where('user_id', auth()->id()))->where('status', 'in_progress')->first();
             if ($order) {
                 return $order;
             }
@@ -132,8 +138,13 @@ class POSController extends Controller
         // "held" if it actually has items — an empty cart should never
         // clutter the Held Orders list. Orders normally only become Held
         // when the cashier explicitly clicks "+ New Order" or "Save as Draft".
+        // v2.2 (F3): only carts untouched for > 15 minutes are stray-held
+        // here — a cart touched in the last few minutes may be live on
+        // another device, and holding it would make its items vanish
+        // mid-transaction on that device.
         Order::where('user_id', auth()->id())
             ->where('status', 'in_progress')
+            ->where('updated_at', '<', now()->subMinutes(15))
             ->get()
             ->each(function ($stray) {
                 if ($stray->items()->count() > 0) {
@@ -159,7 +170,7 @@ class POSController extends Controller
     {
         $currentId = $request->session()->get('current_order_id');
         if ($currentId) {
-            $current = Order::where('id', $currentId)->where('status', 'in_progress')->first();
+            $current = Order::where('id', $currentId)->when(!$this->isPrivileged(), fn ($q) => $q->where('user_id', auth()->id()))->where('status', 'in_progress')->first();
             if ($current) {
                 if ($current->items()->count() > 0) {
                     $current->update(['status' => 'hold']);
@@ -209,7 +220,7 @@ class POSController extends Controller
 
         $currentId = $request->session()->get('current_order_id');
         if ($currentId && $currentId != $order->id) {
-            $current = Order::where('id', $currentId)->where('status', 'in_progress')->first();
+            $current = Order::where('id', $currentId)->when(!$this->isPrivileged(), fn ($q) => $q->where('user_id', auth()->id()))->where('status', 'in_progress')->first();
             if ($current) {
                 if ($current->items()->count() > 0) {
                     $current->update(['status' => 'hold']);
@@ -454,8 +465,11 @@ class POSController extends Controller
 
     private function availableStock(Product $product): float
     {
+        // v2.2 (F1): quotations are estimates, not sales — they must not
+        // reserve stock (and, having status hold, they were never purged,
+        // so a forgotten estimate blocked the goods forever).
         $reserved = OrderItem::where('product_id', $product->id)
-            ->whereHas('order', fn ($q) => $q->whereIn('status', ['in_progress', 'hold']))
+            ->whereHas('order', fn ($q) => $q->whereIn('status', ['in_progress', 'hold'])->where('is_quotation', false))
             ->sum('quantity');
 
         return $product->roundQuantity($product->stock - $reserved);
@@ -526,13 +540,10 @@ class POSController extends Controller
             return back()->withErrors(['error' => 'Cannot complete an empty order.']);
         }
 
-        // FIXED (H4, second half): if ledger payments (OrderPayment rows)
-        // already exist for this order, the checkout form's paid amount
-        // must NOT overwrite the order's paid/due — those figures already
-        // reflect recorded payments (and, after an edit, the recalculated
-        // total). They are preserved below, along with the original
-        // payment method/details, instead of being replaced by the
-        // checkout input.
+        // v2.2 (R1) — see the unified checkout computation inside the
+        // transaction below: checkout input is authoritative again, and
+        // when ledger payments exist the difference is written as one
+        // OrderPayment row instead of silently dropping the till payment.
         $hasPayments = $order->payments()->exists();
 
         DB::transaction(function () use ($order, $data, $hasPayments) {
@@ -571,49 +582,75 @@ class POSController extends Controller
                 ]);
             }
 
-            if ($hasPayments) {
-                $paid = $locked->paid_amount;
-                $due = $locked->due_amount;
-                $paymentMethod = $locked->payment_method;
-                $bankName = $locked->bank_name;
-                $transactionId = $locked->transaction_id;
-                $cashAmount = $locked->cash_amount;
-                $bankAmount = $locked->bank_amount;
+            // v2.2 (R1): checkout input is authoritative again — the
+            // ORIGINAL semantics. v2.0 preserved the stored figures
+            // whenever OrderPayment rows existed, which silently threw
+            // away money actually taken at the till: an advance of 4,000
+            // on file + 6,000 collected at the till on a 10,000 bill
+            // stayed "paid 4,000, due 6,000", and the customer was shown
+            // as owing 6,000 they had already paid (feeding Capital
+            // Receivables). The ledger history is NOT wiped by this:
+            // when ledger payments exist and the checkout total differs
+            // from the stored paid figure, one OrderPayment row for the
+            // difference is written below, so the ledger still
+            // reconciles to the order. NOTE: the checkout paid field is
+            // the TOTAL paid, not an additional amount — same as the
+            // original code, and the checkout form defaults it to the
+            // order total for an in_progress order.
+            $paid = $data['payment_method'] === 'split'
+                ? (float) ($data['cash_amount'] ?? 0) + (float) ($data['bank_amount'] ?? 0)
+                : (float) ($data['paid_amount'] ?? $locked->total);
+
+            // Named customer: due is SIGNED — if they hand over more than the
+            // bill (e.g. 25,000 against 24,476), the extra (-524) is kept as
+            // a negative due/advance on their account instead of being
+            // silently thrown away by max(0, ...). Walk-in (no customer)
+            // has no account to hold an advance on, so the extra is just
+            // change handed back and due stays at 0.
+            $due = $locked->customer_id
+                ? round($locked->total - $paid, 2)
+                : max(0, round($locked->total - $paid, 2));
+
+            $paymentMethod = $data['payment_method'];
+            $bankName = $data['bank_name'] ?? null;
+            $transactionId = $data['transaction_id'] ?? null;
+
+            // FIXED (H23-part): the split breakdown used to be computed
+            // and then thrown away — cash_amount/bank_amount were never
+            // persisted, so Cash Reconciliation could never count the
+            // cash half of a split sale. Now it is stored on the order
+            // (columns created by the migration package): split stores
+            // both parts; cash stores cash_amount=paid, bank null; bank
+            // stores bank_amount=paid, cash null.
+            if ($data['payment_method'] === 'split') {
+                $cashAmount = (float) ($data['cash_amount'] ?? 0);
+                $bankAmount = (float) ($data['bank_amount'] ?? 0);
+            } elseif ($data['payment_method'] === 'cash') {
+                $cashAmount = $paid;
+                $bankAmount = null;
             } else {
-                $paid = $data['payment_method'] === 'split'
-                    ? (float) ($data['cash_amount'] ?? 0) + (float) ($data['bank_amount'] ?? 0)
-                    : (float) ($data['paid_amount'] ?? $locked->total);
+                $cashAmount = null;
+                $bankAmount = $paid;
+            }
 
-                // Named customer: due is SIGNED — if they hand over more than the
-                // bill (e.g. 25,000 against 24,476), the extra (-524) is kept as
-                // a negative due/advance on their account instead of being
-                // silently thrown away by max(0, ...). Walk-in (no customer)
-                // has no account to hold an advance on, so the extra is just
-                // change handed back and due stays at 0.
-                $due = $locked->customer_id
-                    ? round($locked->total - $paid, 2)
-                    : max(0, round($locked->total - $paid, 2));
-
-                $paymentMethod = $data['payment_method'];
-                $bankName = $data['bank_name'] ?? null;
-                $transactionId = $data['transaction_id'] ?? null;
-
-                // FIXED (H23-part): the split breakdown used to be computed
-                // and then thrown away — cash_amount/bank_amount were never
-                // persisted, so Cash Reconciliation could never count the
-                // cash half of a split sale. Now it is stored on the order
-                // (columns created by the migration package): split stores
-                // both parts; cash stores cash_amount=paid, bank null; bank
-                // stores bank_amount=paid, cash null.
-                if ($data['payment_method'] === 'split') {
-                    $cashAmount = (float) ($data['cash_amount'] ?? 0);
-                    $bankAmount = (float) ($data['bank_amount'] ?? 0);
-                } elseif ($data['payment_method'] === 'cash') {
-                    $cashAmount = $paid;
-                    $bankAmount = null;
-                } else {
-                    $cashAmount = null;
-                    $bankAmount = $paid;
+            // v2.2 (R1, ledger side): a positive difference is money
+            // taken at the till beyond what the ledger already shows
+            // (credit); a negative difference is a downward correction
+            // of the recorded paid figure (debit). No row when the
+            // checkout total equals the stored paid figure. This row is
+            // history only — the order totals above are already set from
+            // the checkout input, so nothing here double-adjusts them,
+            // and the customer-balance increment at the end of this
+            // transaction uses the final $due exactly once.
+            if ($hasPayments) {
+                $delta = round($paid - (float) $locked->paid_amount, 2);
+                if (abs($delta) > 0.004) {
+                    $locked->payments()->create([
+                        'type' => $delta > 0 ? 'credit' : 'debit',
+                        'amount' => abs($delta),
+                        'note' => 'Checkout adjustment at completion — ledger brought in line with till payment',
+                        'user_id' => auth()->id(),
+                    ]);
                 }
             }
 
@@ -736,7 +773,7 @@ class POSController extends Controller
         // Order); an empty one is discarded, never sent to Trash (v1.4).
         $currentId = $request->session()->get('current_order_id');
         if ($currentId) {
-            $current = Order::where('id', $currentId)->where('status', 'in_progress')->first();
+            $current = Order::where('id', $currentId)->when(!$this->isPrivileged(), fn ($q) => $q->where('user_id', auth()->id()))->where('status', 'in_progress')->first();
             if ($current) {
                 if ($current->items()->count() > 0) {
                     $current->update(['status' => 'hold']);
@@ -779,14 +816,39 @@ class POSController extends Controller
     public function productSearch(Request $request)
     {
         $q = $request->input('q', '');
-        $products = Product::where('is_active', true)
-            ->where(function ($qq) use ($q) {
-                $qq->where('name', 'like', "%{$q}%")
-                   ->orWhere('sku', 'like', "%{$q}%")
-                   ->orWhere('barcode', 'like', "%{$q}%");
-            })
+        $columns = ['id', 'name', 'sku', 'barcode', 'stock', 'unit', 'sale_price', 'max_discount_percent'];
+
+        // v2.2 (F4): a scanned barcode is an exact identifier, not a
+        // substring. If the query IS a barcode, return only the exact
+        // match(es) — never an unordered top-10 where the real product
+        // can sit below an unrelated first result that Enter then
+        // picks. Otherwise fall back to the substring search, ordered
+        // by name so the order is stable.
+        $exact = Product::where('is_active', true)
+            ->where('barcode', $q)
+            ->orderBy('name')
             ->limit(10)
-            ->get(['id', 'name', 'sku', 'stock', 'unit', 'sale_price', 'max_discount_percent']);
+            ->get($columns);
+
+        $products = $exact->isNotEmpty()
+            ? $exact
+            : Product::where('is_active', true)
+                ->where(function ($qq) use ($q) {
+                    $qq->where('name', 'like', "%{$q}%")
+                       ->orWhere('sku', 'like', "%{$q}%")
+                       ->orWhere('barcode', 'like', "%{$q}%");
+                })
+                ->orderBy('name')
+                ->limit(10)
+                ->get($columns);
+
+        // The dropdown used to show raw stock, ignoring items reserved
+        // in other carts. Attach the reserved-net figure (same helper
+        // the cart itself uses) so the till never promises stock that
+        // is not actually free.
+        $products->each(function ($p) {
+            $p->available_stock = $this->availableStock($p);
+        });
 
         return response()->json($products);
     }

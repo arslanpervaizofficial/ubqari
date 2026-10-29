@@ -25,7 +25,7 @@
 <table class="w-full text-sm">
     <thead class="bg-gray-50 text-left"><tr>
         @if(auth()->user()->role === 'admin')<th class="p-3"><input type="checkbox" data-bulk-select-all="suppliers"></th>@endif
-        <th class="p-3"></th><th class="p-3">Name</th><th class="p-3">Phone</th><th class="p-3">Email</th><th class="p-3">Received PO Total</th><th class="p-3">Status</th><th class="p-3">Actions</th>
+        <th class="p-3"></th><th class="p-3">Name</th><th class="p-3">Phone</th><th class="p-3">Email</th><th class="p-3">Received PO Total</th><th class="p-3">Due (balance)</th><th class="p-3">Status</th><th class="p-3">Actions</th>
     </tr></thead>
     <tbody>
     @foreach($suppliers as $s)
@@ -36,10 +36,12 @@
             <td class="p-3">{{ $s->phone }}</td>
             <td class="p-3">{{ $s->email }}</td>
             <td class="p-3 font-semibold">{{ $s->received_po_total !== null ? number_format($s->received_po_total, 2) : '—' }}</td>
+            <td class="p-3 font-semibold {{ $s->balance > 0 ? 'text-red-600' : '' }}">{{ $s->balance !== null ? number_format($s->balance, 2) : '—' }}</td>
             <td class="p-3">
                 <span class="px-2 py-1 rounded text-xs {{ $s->is_active ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600' }}">{{ $s->is_active ? 'Active' : 'Disabled' }}</span>
             </td>
             <td class="p-3 space-x-1 whitespace-nowrap">
+                <a href="{{ route('suppliers.show', $s) }}" class="btn btn-blue">View</a>
                 <a href="{{ route('suppliers.edit', $s) }}" class="btn btn-blue">Edit</a>
                 <form method="POST" action="{{ route('suppliers.toggle-active', $s) }}" class="inline">
                     @csrf

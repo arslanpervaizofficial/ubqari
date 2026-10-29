@@ -6,6 +6,9 @@
     <a href="{{ route('cash-management.index') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back</a>
 </div>
 <p class="text-gray-600 mb-4">Currently owed: <span class="font-bold {{ $party->balance > 0 ? 'text-red-600' : 'text-green-700' }}">{{ number_format($party->balance, 2) }}</span></p>
+@if(!empty($balanceCorrected))
+<div class="bg-yellow-50 text-yellow-800 text-sm px-4 py-2 rounded-lg mb-4">Balance corrected from {{ number_format($balanceCorrected['old'], 2) }} to {{ number_format($balanceCorrected['new'], 2) }} to match the transaction history.</div>
+@endif
 
 <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
     <h2 class="font-semibold mb-3">Record Borrow / Repay</h2>

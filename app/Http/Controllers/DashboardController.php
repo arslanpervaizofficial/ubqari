@@ -45,16 +45,21 @@ class DashboardController extends Controller
             ->value('total');
         $monthSales = $monthSales - $monthReturns;
 
-        $lowStock = Product::active()->whereColumn('stock', '<=', 'min_stock')->whereNotNull('min_stock')->get();
+        // v2.2 (F11): low-stock excludes out-of-stock (stock > 0) —
+        // the two cards used to count the same products twice.
+        $lowStock = Product::active()->whereColumn('stock', '<=', 'min_stock')->whereNotNull('min_stock')->where('stock', '>', 0)->get();
         $outOfStock = Product::active()->where('stock', '<=', 0)->get();
 
         $suggestQty = function ($p) {
             $target = $p->max_stock ?? (($p->min_stock ?? 0) * 2) ?: 10;
-            return max(1, round($target - $p->stock));
+            // v2.2 (F11): no max(1, ...) floor any more — a product
+            // already at/above target suggests 0, not 1.
+            return max(0, round($target - $p->stock));
         };
         $lowStock->each(fn ($p) => $p->suggested_qty = $suggestQty($p));
         $outOfStock->each(fn ($p) => $p->suggested_qty = $suggestQty($p));
-        $heldOrdersCount = Order::where('status', 'hold')->count();
+        // v2.2 (F1/F11): quotations are estimates, not held orders.
+        $heldOrdersCount = Order::where('status', 'hold')->where('is_quotation', false)->count();
         $totalProducts = Product::active()->count();
         $totalCustomers = Customer::count();
 

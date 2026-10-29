@@ -8,7 +8,7 @@
 <p class="text-sm text-gray-500 mb-4">Supplier: {{ $purchaseOrder->supplier->name ?? '— (deleted supplier)' }} — Received</p>
 
 <div class="mb-4 bg-blue-50 text-blue-800 text-sm px-4 py-2 rounded-lg">
-    Click <strong>Received Qty</strong> or <strong>Discount %</strong> to correct a mistake — it saves automatically when you click away or press Enter. Stock and totals update live. Product and Cost Price aren't editable here; those aren't corrections, they'd be a different purchase.
+    Click <strong>Still held (net of returns)</strong> or <strong>Discount %</strong> to correct a mistake — it saves automatically when you click away or press Enter. Stock and totals update live. "Still held" is what is actually left in stock from this line after any supplier returns, not the gross quantity that arrived. Product and Cost Price aren't editable here; those aren't corrections, they'd be a different purchase.
 </div>
 
 <div class="bg-white p-6 rounded-xl shadow-sm w-full">
@@ -18,7 +18,7 @@
             <tr>
                 <th class="py-2 pr-4">Product</th>
                 <th class="px-4">Ordered Qty</th>
-                <th class="px-4">Received Qty <span class="text-gray-400 font-normal">(click to edit)</span></th>
+                <th class="px-4">Still held <span class="text-gray-400 font-normal">(net of returns, click to edit)</span></th>
                 <th class="px-4">Current Stock</th>
                 <th class="px-4">Cost Price</th>
                 <th class="px-4">Discount % <span class="text-gray-400 font-normal">(click to edit)</span></th>

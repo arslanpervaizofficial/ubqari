@@ -77,7 +77,14 @@ class OrderController extends Controller
         }
 
         $data = $request->validate([
-            'order_date' => ['required', 'date'],
+            // v2.2 (F2): future dates are rejected — a completed order
+            // must not be moved into a future month's revenue. Judged
+            // in shop time (Asia/Karachi), not server time. NOTE: no
+            // audit row (who/from/to/reason) is written yet — that
+            // needs a new table and is deferred, see CHANGES-v2.2.txt.
+            // Movement/payment dates still keep their real dates and
+            // do not move with the order.
+            'order_date' => ['required', 'date', 'before_or_equal:' . \Carbon\Carbon::now('Asia/Karachi')->toDateTimeString()],
         ]);
 
         $newDate = \Carbon\Carbon::parse($data['order_date']);

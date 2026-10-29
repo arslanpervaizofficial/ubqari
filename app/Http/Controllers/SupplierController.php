@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\Supplier;
+use App\Models\SupplierPayment;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -25,9 +27,10 @@ class SupplierController extends Controller
     {
         // Received PO total per supplier, in one query (not one per row),
         // so the list can show what each supplier has actually supplied.
-        // This is received value before any supplier payments — there is
-        // no supplier_payments table yet, so it is NOT a settled "due"
-        // figure on its own (see Supplier::duesFigures() and CHANGES.txt).
+        // The settled "Due" figure is the suppliers.balance column
+        // (selected with the row by default) — received value minus
+        // recorded payments/credits plus debits (see
+        // Supplier::duesFigures()). The view shows both side by side.
         $suppliers = $this->filteredQuery($request)
             ->withSum(['purchaseOrders as received_po_total' => fn ($q) => $q->where('status', 'received')], 'total')
             ->orderBy('name')->paginate(20)->withQueryString();
@@ -35,29 +38,75 @@ class SupplierController extends Controller
     }
 
     /** Supplier dues report for one supplier — received PO totals minus
-     *  recorded supplier payments (currently always 0: no
-     *  supplier_payments table exists yet). Delegates to
-     *  Supplier::duesFigures() so the formula lives in one place, and so
-     *  ReportController can reuse it when supplier dues are added to
-     *  Capital Liabilities (see CHANGES.txt). */
+     *  recorded supplier payments/credits plus debits. Delegates to
+     *  Supplier::duesFigures() so the formula lives in one place, and
+     *  ReportController reuses the stored balance for Capital
+     *  Liabilities. */
     public function supplierDues(Supplier $supplier): array
     {
         return $supplier->duesFigures();
     }
 
-    /** Supplier detail page: received + pending purchase orders with the
-     *  dues figures above. NOTE: no route for this exists yet — the
-     *  routes owner must add one GET route, e.g.
-     *  Route::get('suppliers/{supplier}', [SupplierController::class, 'show'])->name('suppliers.show');
-     *  (inside the existing admin/manager group, next to the other
-     *  supplier routes). Until then this method and its view are shipped
-     *  but unreachable, and dues remain visible on the suppliers list. */
+    /** Supplier detail page: dues breakdown, received + pending purchase
+     *  orders, and the payment/credit/debit history. The balance is
+     *  re-synced on every visit (same pattern as CashManagement's ledger
+     *  page calling syncBalance()) so a missed event hook can never
+     *  leave a stale figure sitting here. */
     public function show(Supplier $supplier)
     {
-        $dues = $this->supplierDues($supplier);
+        $dues = $supplier->syncBalance();
         $receivedOrders = $supplier->purchaseOrders()->where('status', 'received')->latest()->paginate(20);
         $pendingOrders = $supplier->purchaseOrders()->where('status', 'pending')->latest()->get();
-        return view('suppliers.show', compact('supplier', 'dues', 'receivedOrders', 'pendingOrders'));
+        $payments = $supplier->payments()->with('user')->latest()->paginate(20);
+        return view('suppliers.show', compact('supplier', 'dues', 'receivedOrders', 'pendingOrders', 'payments'));
+    }
+
+    /** Records a supplier ledger entry — same shape as
+     *  CustomerController::recordPayment(), with the supplier's sign
+     *  convention (see SupplierPayment): payment = cash paid to the
+     *  supplier, credit = supplier credit note / discount granted,
+     *  debit = extra charge by the supplier. Ledger row + balance sync
+     *  must succeed or fail together, otherwise the history and the
+     *  balance disagree permanently. Admin/manager (see routes). */
+    public function recordPayment(Request $request, Supplier $supplier)
+    {
+        $data = $request->validate([
+            'type' => ['required', 'in:payment,credit,debit'],
+            'amount' => ['required', 'numeric', 'min:0.01'],
+            'note' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        DB::transaction(function () use ($supplier, $data) {
+            $supplier->payments()->create([
+                'type' => $data['type'],
+                'amount' => $data['amount'],
+                'note' => $data['note'] ?? null,
+                'user_id' => auth()->id(),
+            ]);
+            $supplier->syncBalance();
+        });
+
+        $labels = ['payment' => 'Payment recorded', 'credit' => 'Credit note recorded', 'debit' => 'Debit recorded'];
+        return back()->with('status', ($labels[$data['type']] ?? 'Entry recorded') . ' and supplier balance updated.');
+    }
+
+    /** Moves one supplier ledger entry to Trash (soft delete) and
+     *  re-syncs the balance — mirrors
+     *  CustomerController::destroyPayment() (reverseEffect + delete),
+     *  except the final syncBalance() recomputes from live data, so the
+     *  result is exact even if the reverse arithmetic ever drifts.
+     *  Admin only (see routes). */
+    public function destroyPayment(Supplier $supplier, SupplierPayment $payment)
+    {
+        abort_unless((int) $payment->supplier_id === (int) $supplier->id, 404);
+
+        DB::transaction(function () use ($supplier, $payment) {
+            $payment->reverseEffect();
+            $payment->delete();
+            $supplier->fresh()->syncBalance();
+        });
+
+        return back()->with('status', 'Supplier ledger entry moved to Trash and balance updated.');
     }
 
     public function create()
@@ -146,26 +195,72 @@ class SupplierController extends Controller
         return redirect()->route('suppliers.index')->with('status', 'Supplier updated.');
     }
 
+    /** Why a supplier cannot be deleted while money is outstanding —
+     *  mirrors the customer delete guard (v2, H13): deleting a supplier
+     *  with a non-zero balance would make what is owed (or an advance
+     *  paid to them) simply vanish from Capital Liabilities, while their
+     *  purchase orders still exist. Settle the balance first, or use
+     *  Disable instead, which keeps history intact. */
+    private function deleteBlockedReason(Supplier $supplier): ?string
+    {
+        $supplier->syncBalance();
+        if (round((float) $supplier->fresh()->balance, 2) != 0.0) {
+            return "Cannot delete {$supplier->name}: their balance is " . number_format((float) $supplier->balance, 2) . " — settle it first (record a payment on their detail page) or Disable them instead, which keeps the history.";
+        }
+        return null;
+    }
+
+    /** Deletes the given suppliers one by one, skipping (not deleting)
+     *  any with an outstanding balance, and reports both counts. */
+    private function deleteWithBalanceGuard($suppliers): array
+    {
+        $deleted = 0;
+        $blocked = [];
+        foreach ($suppliers as $supplier) {
+            if ($this->deleteBlockedReason($supplier) !== null) {
+                $blocked[] = $supplier->name;
+                continue;
+            }
+            $supplier->delete();
+            $deleted++;
+        }
+        return [$deleted, $blocked];
+    }
+
     public function destroy(Supplier $supplier)
     {
+        if (($reason = $this->deleteBlockedReason($supplier)) !== null) {
+            return back()->withErrors(['supplier' => $reason]);
+        }
         $supplier->delete();
         return back()->with('status', 'Supplier moved to Trash.');
     }
 
-    /** Bulk-delete just the checked rows — moves each to Trash (soft delete). */
+    /** Bulk-delete just the checked rows — moves each to Trash (soft delete),
+     *  except suppliers with an outstanding balance, which are skipped
+     *  and named in the message. */
     public function destroySelected(Request $request)
     {
         $ids = (array) $request->input('ids', []);
-        $count = Supplier::whereIn('id', $ids)->delete();
-        return back()->with('status', "{$count} supplier(s) moved to Trash.");
+        [$deleted, $blocked] = $this->deleteWithBalanceGuard(Supplier::whereIn('id', $ids)->get());
+        $message = "{$deleted} supplier(s) moved to Trash.";
+        if ($blocked) {
+            $message .= ' Skipped (outstanding balance): ' . implode(', ', $blocked) . '.';
+        }
+        return back()->with('status', $message);
     }
 
     /** Deletes every supplier matching the CURRENT search/filter (not the
-     *  whole table) — same query index() uses to decide what's on screen. */
+     *  whole table) — same query index() uses to decide what's on screen.
+     *  Suppliers with an outstanding balance are skipped and named. */
     public function destroyAll(Request $request)
     {
-        $count = $this->filteredQuery($request)->delete();
-        return back()->with('status', "{$count} supplier(s) moved to Trash.");
+        [$deleted, $blocked] = $this->deleteWithBalanceGuard($this->filteredQuery($request)->get());
+        $message = "{$deleted} supplier(s) moved to Trash.";
+        if ($blocked) {
+            $message .= ' Skipped (outstanding balance): ' . implode(', ', $blocked) . '.';
+        }
+        return back()->with('status', $message);
     }
 
     /** Disable instead of delete — keeps past purchase-order history intact

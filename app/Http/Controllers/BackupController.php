@@ -25,6 +25,14 @@ class BackupController extends Controller
         'product_price_histories',
         'customers',
         'suppliers',
+        // v2.2 (F9): PO drafts were never backed up, restored or
+        // reset, so stale drafts survived a restore/reset and the PO
+        // create page auto-restored them. Drafts sit after their
+        // parents (users, suppliers) so inserts stay in safe order.
+        // reset() deletes every table in this list, so drafts are
+        // wiped by reset automatically. Range backups scope drafts by
+        // created_at (the default branch in rangeRows()).
+        'purchase_order_drafts',
         'orders',
         'order_items',
         // FIXED (v2, H18): order_payments used to be missing from this
@@ -280,6 +288,28 @@ class BackupController extends Controller
             DB::rollBack();
             DB::statement('SET FOREIGN_KEY_CHECKS=1');
             return back()->withErrors(['backup_file' => 'Restore failed, nothing was changed: ' . $e->getMessage()]);
+        }
+
+        // v2.2 (F9): drop drafts whose user or supplier no longer
+        // resolves — otherwise a restored database can hand the PO
+        // create page a draft for a deleted supplier, or a user_id
+        // that now belongs to someone else. Null ids are allowed
+        // (drafts can be ownerless), so only non-null dangling
+        // references are removed. Guarded by hasTable so restores on
+        // installs without the drafts table still work.
+        if (Schema::hasTable('purchase_order_drafts')) {
+            DB::table('purchase_order_drafts')
+                ->where(function ($q) {
+                    $q->whereNotNull('user_id')->whereNotExists(function ($sq) {
+                        $sq->select(DB::raw(1))->from('users')->whereColumn('users.id', 'purchase_order_drafts.user_id');
+                    });
+                })
+                ->orWhere(function ($q) {
+                    $q->whereNotNull('supplier_id')->whereNotExists(function ($sq) {
+                        $sq->select(DB::raw(1))->from('suppliers')->whereColumn('suppliers.id', 'purchase_order_drafts.supplier_id');
+                    });
+                })
+                ->delete();
         }
 
         if ($type === 'full') {

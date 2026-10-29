@@ -72,6 +72,16 @@ class StockReturn extends Model
             $this->product->increment('stock', $this->quantity);
         }
 
+        // v2.2 (R2): a supplier return reduced the PO line's
+        // received_quantity at return time (H8 net invariant), so
+        // deleting the return must put it back and recompute the PO
+        // totals — otherwise the line stays reduced forever and the
+        // same units can be "returned" a second time. Runs in the
+        // caller's transaction, same as the stock move above.
+        if ($this->type === 'to_supplier') {
+            $this->adjustPoHeldQuantity((float) $this->quantity);
+        }
+
         StockMovement::where('stock_return_id', $this->id)->delete();
 
         // H5 — reverse the refund credit this return created, if any.
@@ -108,6 +118,22 @@ class StockReturn extends Model
             return;
         }
 
+        // v2.2 (R2): guard the PO side BEFORE anything is mutated — if
+        // the PO line was corrected downward after this return was
+        // recorded, taking the return back would drive the net held
+        // figure negative. The caller wraps this in a transaction, so
+        // throwing here still rolls everything back.
+        if ($this->type === 'to_supplier') {
+            $poItem = $this->purchaseOrderItem;
+            if ($poItem && (float) $poItem->received_quantity < (float) $this->quantity) {
+                throw new \RuntimeException(
+                    "Can't restore this return: the PO line for \"{$this->product->name}\" only holds {$poItem->received_quantity} now, "
+                    . "but this return is for {$this->quantity} — the line was corrected after the return. "
+                    . 'Fix the PO line first, then restore this return.'
+                );
+            }
+        }
+
         if ($this->type === 'from_customer') {
             $this->product->increment('stock', $this->quantity);
             $reason = 'Customer return restored from Trash';
@@ -134,6 +160,13 @@ class StockReturn extends Model
             'stock_return_id' => $this->id,
         ]);
 
+        // v2.2 (R2): exact inverse of the reverseEffects() addition
+        // above — restoring a supplier return takes the units back out
+        // of the PO line's net held quantity and recomputes PO totals.
+        if ($this->type === 'to_supplier') {
+            $this->adjustPoHeldQuantity(-(float) $this->quantity);
+        }
+
         if ($this->type === 'from_customer') {
             foreach (CustomerPayment::withTrashed()->where('stock_return_id', $this->id)->get() as $payment) {
                 if (!$payment->trashed()) {
@@ -145,5 +178,48 @@ class StockReturn extends Model
                 }
             }
         }
+    }
+
+    /** v2.2 (R2): the PO side of a supplier return's reversal. A
+     *  positive delta adds units back to the PO line's net held
+     *  quantity (return deleted), a negative delta takes them away
+     *  again (return restored). Recomputes the PO totals with the same
+     *  formula StockReturnController::recalculatePoTotals() uses, and
+     *  re-syncs the supplier's balance so the ledger follows the PO
+     *  total. The PO is loaded withTrashed so a return deleted while
+     *  its PO sits in Trash still keeps that PO's figures correct for
+     *  when it is restored. Silently skips when the PO line or PO no
+     *  longer exists (nothing left to adjust). Requires the v2.2
+     *  Supplier model (syncBalance) — install the whole package. */
+    private function adjustPoHeldQuantity(float $delta): void
+    {
+        $poItem = $this->purchaseOrderItem;
+        if (!$poItem) {
+            return;
+        }
+        $po = PurchaseOrder::withTrashed()->find($poItem->purchase_order_id);
+        if (!$po) {
+            return;
+        }
+        $poItem->increment('received_quantity', $delta);
+        $this->recalculatePoTotals($po);
+        $supplier = Supplier::withTrashed()->find($po->supplier_id);
+        if ($supplier) {
+            $supplier->syncBalance();
+        }
+    }
+
+    /** Same formula as StockReturnController::recalculatePoTotals()
+     *  (duplicated here because that method is private to the
+     *  controller and this model needs it on the Trash paths). */
+    private function recalculatePoTotals(PurchaseOrder $purchaseOrder): void
+    {
+        $subtotal = $purchaseOrder->items()->get()->sum(fn ($item) => $item->received_quantity * $item->net_cost_price);
+        $discountAmount = round($subtotal * ($purchaseOrder->discount_percent / 100), 2);
+        $purchaseOrder->update([
+            'subtotal' => round($subtotal, 2),
+            'discount_amount' => $discountAmount,
+            'total' => round($subtotal - $discountAmount, 2),
+        ]);
     }
 }

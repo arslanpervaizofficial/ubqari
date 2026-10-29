@@ -8,17 +8,26 @@
 </style>
 
 <div id="invoice-card" class="max-w-2xl mx-auto bg-white p-6 rounded-xl shadow-sm">
+    {{-- v2.2 (F6): a held/in-progress cart is a draft, not a sale —
+         it must never print as a real INVOICE with the full amount
+         "Due". Quotations already had their own label; drafts get
+         one too, and the Paid/Due blocks below are hidden for them. --}}
+    @php($isDraft = in_array($order->status, ['in_progress', 'hold']) && !$order->is_quotation)
     <div class="invoice-header flex justify-between mb-4">
         <div>
             <h1 class="text-xl font-bold">{{ \App\Models\AppSetting::current()->print_title }}</h1>
-            <p class="text-sm text-gray-500">{{ $order->is_quotation ? 'QUOTATION / ESTIMATE' : 'INVOICE' }}</p>
+            <p class="text-sm text-gray-500">{{ $order->is_quotation ? 'QUOTATION / ESTIMATE' : ($isDraft ? 'DRAFT — NOT A SALE' : 'INVOICE') }}</p>
         </div>
         <div class="text-right text-sm">
             <div>Order #: {{ $order->order_number }}</div>
             <div>Date: {{ $order->created_at->format('Y-m-d H:i') }}</div>
-            <div>Cashier: {{ $order->cashier->name }}</div>
+            <div>Cashier: {{ $order->cashier->name ?? '—' }}</div>
         </div>
     </div>
+
+    @if($isDraft)
+    <p class="text-sm font-bold text-red-600 mb-4">DRAFT — NOT A SALE: this cart has not been completed yet. No payment is due on this document.</p>
+    @endif
 
     <p class="mb-2 text-sm">Customer: {{ $order->customer->name ?? 'Walk-in' }}</p>
 
@@ -43,7 +52,7 @@
         <div>Item Discounts: -{{ number_format($order->line_discount_total, 2) }}</div>
         <div>Overall Discount ({{ $order->discount_percent }}%): -{{ number_format($order->discount_amount, 2) }}</div>
         <div class="font-bold text-lg">Total: {{ number_format($order->total, 2) }}</div>
-        @if(!$order->is_quotation)
+        @if(!$order->is_quotation && !$isDraft)
         <div>Paid: {{ number_format($order->paid_amount, 2) }} ({{ $order->payment_method }})</div>
         @if($order->bank_name || $order->transaction_id)
             <div class="text-gray-500">{{ $order->bank_name }} @if($order->transaction_id) · Txn: {{ $order->transaction_id }} @endif</div>
@@ -101,11 +110,11 @@
         <div class="c title">{{ $cfg->print_title }}</div>
         @if($cfg->print_address)<div class="c hdr">{{ $cfg->print_address }}</div>@endif
         @if($cfg->print_phone)<div class="c hdr">Phone: {{ $cfg->print_phone }}</div>@endif
-        <div class="c sub">{{ $order->is_quotation ? 'QUOTATION / ESTIMATE' : 'INVOICE' }}</div>
+        <div class="c sub">{{ $order->is_quotation ? 'QUOTATION / ESTIMATE' : ($isDraft ? 'DRAFT — NOT A SALE' : 'INVOICE') }}</div>
         <div class="hr"></div>
         <div>Order #: {{ $order->order_number }}</div>
         <div>Customer: {{ $order->customer->name ?? 'Walk-in' }}</div>
-        <div>Cashier: {{ $order->cashier->name }}</div>
+        <div>Cashier: {{ $order->cashier->name ?? '—' }}</div>
         <div class="hr"></div>
         @foreach($order->items as $item)
             <div class="item">
@@ -120,7 +129,7 @@
         <div class="row"><span>Discount ({{ rtrim(rtrim(number_format($order->discount_percent, 2, '.', ''), '0'), '.') }}%):</span><span>-{{ number_format($order->discount_amount, 2) }}</span></div>
         @endif
         <div class="row big"><span>Total</span><span>{{ number_format($order->total, 2) }}</span></div>
-        @if(!$order->is_quotation)
+        @if(!$order->is_quotation && !$isDraft)
             <div class="hr"></div>
             <div class="row"><span>Paid ({{ $order->payment_method }}):</span><span>{{ number_format($order->paid_amount, 2) }}</span></div>
             @if($order->bank_name || $order->transaction_id)

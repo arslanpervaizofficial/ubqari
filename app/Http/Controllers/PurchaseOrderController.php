@@ -43,6 +43,11 @@ class PurchaseOrderController extends Controller
             return back()->withErrors(['purchase_order' => $e->getMessage()]);
         }
 
+        // v2.2 supplier ledger hook: a trashed PO no longer counts in
+        // received totals (purchaseOrders() excludes soft-deleted rows),
+        // so what we owe this supplier has changed.
+        $purchaseOrder->supplier?->syncBalance();
+
         return back()->with('status', "PO #{$purchaseOrder->id} moved to Trash — stock adjusted.");
     }
 
@@ -83,6 +88,8 @@ class PurchaseOrderController extends Controller
                     $purchaseOrder->reverseReceivedEffects();
                     $purchaseOrder->delete();
                 });
+                // v2.2 supplier ledger hook (same reason as destroy()).
+                $purchaseOrder->supplier?->syncBalance();
                 $deleted++;
             } catch (\RuntimeException $e) {
                 $skipped[] = "PO #{$purchaseOrder->id}";
@@ -522,6 +529,13 @@ class PurchaseOrderController extends Controller
                 // figures stored at store() time sitting there — the
                 // Purchase Report reads total straight off the row.
                 $this->recalculateTotals($locked->fresh());
+
+                // v2.2 supplier ledger hook: this PO is now received, so
+                // what we owe its supplier has changed — re-sync it
+                // inside the same transaction.
+                if ($locked->supplier_id) {
+                    Supplier::find($locked->supplier_id)?->syncBalance();
+                }
             });
         } catch (\RuntimeException $e) {
             return back()->withErrors(['error' => $e->getMessage()]);
@@ -531,9 +545,11 @@ class PurchaseOrderController extends Controller
     }
 
     /** Read-only-looking but click-to-edit view of a received PO. Only
-     *  three things are ever editable here — Received Qty ("stock" that
-     *  came in), each line's own Discount % ("supplier discount"), and the
-     *  PO's overall Discount % (the blanket discount, separate from any one
+     *  three things are ever editable here — Still held (net of
+     *  returns: the quantity from this line still in stock after any
+     *  supplier returns, NOT the gross quantity that arrived), each
+     *  line's own Discount % ("supplier discount"), and the PO's
+     *  overall Discount % (the blanket discount, separate from any one
      *  line's own) — never cost_price or which products are on the order,
      *  since those aren't corrections so much as a different purchase
      *  entirely. Pending (not yet received) POs use the existing
@@ -574,27 +590,22 @@ class PurchaseOrderController extends Controller
             'discount_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
         ]);
 
-        // H7 — two guards on a received-quantity correction, both
-        // returned as JSON 422 so the show page's patch() surfaces the
-        // message instead of silently applying a bad correction:
-        // (1) the new figure may never drop below the quantity already
-        // returned to the supplier for this line — those units are
-        // already out of stock, so a lower figure would double-subtract
-        // them; (2) a reduction may never take product stock below 0.
-        // NOTE on the H8 invariant: received_quantity is now the NET
-        // quantity still held (supplier returns reduce it at return
-        // time), so guard (1) is deliberately conservative — after a
-        // return of R units, the figure cannot be corrected below R even
-        // though the field now shows net held stock. The stock guard (2)
-        // alone would allow such a correction; if that behaviour is
-        // wanted, drop guard (1) and keep (2).
+        // H7 — guard on a received-quantity correction, returned as
+        // JSON 422 so the show page's patch() surfaces the message
+        // instead of silently applying a bad correction: a reduction
+        // may never take product stock below 0.
+        // v2.2 (R4): the old second guard — "never below the quantity
+        // already returned" — is REMOVED. It assumed received_quantity
+        // was the gross figure, but under the H8 invariant the field
+        // holds the NET quantity still held (returns already subtracted
+        // at return time), so the old guard both refused legitimate net
+        // corrections and, worse, let a gross-minded correction (e.g.
+        // "actually only 9 arrived" on a line showing 6 after 4 were
+        // returned) silently overstate stock by the returned amount.
+        // The field is now labelled "Still held (net of returns)" on
+        // the show page so the meaning is unambiguous, and the stock
+        // guard below is the only floor.
         if (array_key_exists('received_quantity', $data) && $data['received_quantity'] !== null) {
-            $alreadyReturned = (float) $item->returns()->sum('quantity');
-            if ((float) $data['received_quantity'] < $alreadyReturned) {
-                return response()->json([
-                    'message' => "Received quantity {$alreadyReturned} se kam nahi ho sakti: is line ki {$alreadyReturned} unit supplier ko return ho chuki hai.",
-                ], 422);
-            }
             $delta = (float) $data['received_quantity'] - (float) $item->received_quantity;
             if ($delta < 0 && (float) $item->product->stock + $delta < 0) {
                 return response()->json([
@@ -641,6 +652,10 @@ class PurchaseOrderController extends Controller
         $purchaseOrder->refresh();
         $this->recalculateTotals($purchaseOrder);
 
+        // v2.2 supplier ledger hook: the PO total changed, so what we
+        // owe its supplier has changed too.
+        $purchaseOrder->supplier?->syncBalance();
+
         return response()->json([
             'received_quantity' => $item->received_quantity,
             'discount_percent' => $item->discount_percent,
@@ -673,6 +688,11 @@ class PurchaseOrderController extends Controller
 
         $purchaseOrder->update(['discount_percent' => $data['discount_percent']]);
         $this->recalculateTotals($purchaseOrder);
+
+        // v2.2 supplier ledger hook (extra, same pattern as updateItem):
+        // the overall discount changes the PO total, so the supplier
+        // balance moves with it.
+        $purchaseOrder->supplier?->syncBalance();
 
         return response()->json([
             'discount_percent' => $purchaseOrder->discount_percent,
@@ -751,6 +771,12 @@ class PurchaseOrderController extends Controller
         } catch (\RuntimeException $e) {
             return back()->withErrors(['purchase_order_item' => $e->getMessage()]);
         }
+
+        // v2.2 supplier ledger hook (extra, same pattern as updateItem):
+        // deleting a line recomputes the PO total, so the supplier
+        // balance moves with it. Pending POs never counted as owed, so
+        // the sync is a harmless no-op for them.
+        $purchaseOrder->fresh()->supplier?->syncBalance();
 
         $msg = $purchaseOrder->status === 'received'
             ? "Product line delete ho gai — stock {$item->received_quantity} se kam kar diya gaya."

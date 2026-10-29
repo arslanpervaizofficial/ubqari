@@ -10,6 +10,7 @@ use App\Models\Order;
 use App\Models\PurchaseOrder;
 use App\Models\StockReturn;
 use App\Models\Supplier;
+use App\Models\SupplierPayment;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
@@ -27,6 +28,10 @@ class TrashController extends Controller
     private const TYPES = [
         'customers' => ['model' => Customer::class, 'label' => 'Customers', 'roles' => ['admin', 'manager']],
         'customer-payments' => ['model' => CustomerPayment::class, 'label' => 'Customer Ledger Entries', 'roles' => ['admin', 'manager']],
+        // v2.2: supplier ledger entries (supplier_payments) can be
+        // restored from Trash like customer ledger entries — the
+        // restore re-applies the balance effect (see restoreEach()).
+        'supplier-payments' => ['model' => SupplierPayment::class, 'label' => 'Supplier Ledger Entries', 'roles' => ['admin', 'manager']],
         'suppliers' => ['model' => Supplier::class, 'label' => 'Suppliers', 'roles' => ['admin', 'manager']],
         'orders' => ['model' => Order::class, 'label' => 'Sales Orders', 'roles' => ['admin', 'manager']],
         'purchase-orders' => ['model' => PurchaseOrder::class, 'label' => 'Purchase Orders', 'roles' => ['admin', 'manager']],
@@ -63,6 +68,7 @@ class TrashController extends Controller
             if ($slug === 'purchase-orders') $query->with('supplier');
             if ($slug === 'stock-returns') $query->with('product', 'customer', 'supplier');
             if ($slug === 'customer-payments') $query->with('customer', 'user');
+            if ($slug === 'supplier-payments') $query->with('supplier', 'user');
             // FIXED (v2, M16): this used to load EVERY trashed row of
             // all 8 types with ->get(), so the page degraded linearly
             // as Trash grew. Each type is now capped at the latest 200
@@ -100,16 +106,43 @@ class TrashController extends Controller
         return back()->with('status', count($items) . ' item(s) restored.');
     }
 
+    /** v2.2 (R9): "Restore All" used to refuse the WHOLE batch when a
+     *  single row failed the stock guard, so 39 good rows could not be
+     *  restored until the 1 bad one was excluded by hand. Now each row
+     *  restores on its own and failures are collected and reported —
+     *  the single Restore button above keeps the old all-or-nothing
+     *  behaviour for a deliberate selection. */
     public function restoreAll(string $type)
     {
         $model = $this->resolveModel($type);
         $items = $model::onlyTrashed()->get();
-        try {
-            $this->restoreEach($items);
-        } catch (\RuntimeException $e) {
-            return back()->withErrors(['error' => $e->getMessage()]);
+        $restored = 0;
+        $refused = [];
+        foreach ($items as $item) {
+            try {
+                $this->restoreEach(collect([$item]));
+                $restored++;
+            } catch (\RuntimeException $e) {
+                $refused[] = $this->trashLabel($item) . ': ' . $e->getMessage();
+            }
         }
-        return back()->with('status', count($items) . ' item(s) restored.');
+        $msg = "{$restored} item(s) restored.";
+        if ($refused) {
+            $msg .= ' Refused (' . count($refused) . '): ' . implode(' | ', $refused);
+        }
+        return back()->with('status', $msg);
+    }
+
+    /** Short label for a trashed row, for restore-all refusal messages. */
+    private function trashLabel($item): string
+    {
+        if ($item instanceof Order) {
+            return "Order {$item->order_number}";
+        }
+        if ($item instanceof PurchaseOrder) {
+            return "PO #{$item->id}";
+        }
+        return class_basename($item) . " #{$item->id}";
     }
 
     /** Refuses a restore with a clear message instead of corrupting data
@@ -127,6 +160,10 @@ class TrashController extends Controller
      *  guard.) This is a pre-check, not a row lock: it matches the
      *  existing PO reverse guard's approach, and the restore itself
      *  still runs inside one transaction.
+     *
+     *  v2.2 (R9): restoreAll() calls restoreEach() per item, so there
+     *  a refusal blocks only that row; restore() (selected rows) still
+     *  refuses the whole selection, as described above.
      *
      *  FIXED (v2, H22-part) — trashed/missing parent customer: the old
      *  code called restoreEffect()/restoreCompletedEffects() blindly.
@@ -169,6 +206,18 @@ class TrashController extends Controller
                         throw new \RuntimeException("Can't restore this ledger entry: its customer no longer exists, so the entry's balance effect cannot be re-applied.");
                     }
                 }
+            } elseif ($item instanceof SupplierPayment) {
+                // v2.2: same parent rule as customer ledger entries —
+                // a payment whose supplier is still in Trash (or gone)
+                // cannot have its balance effect re-applied safely.
+                if ($item->supplier_id) {
+                    if (Supplier::onlyTrashed()->where('id', $item->supplier_id)->exists()) {
+                        throw new \RuntimeException("Can't restore this supplier ledger entry: its supplier is still in Trash. Restore the supplier first, then restore this entry.");
+                    }
+                    if (!Supplier::withTrashed()->where('id', $item->supplier_id)->exists()) {
+                        throw new \RuntimeException("Can't restore this supplier ledger entry: its supplier no longer exists, so the entry's balance effect cannot be re-applied.");
+                    }
+                }
             }
         }
 
@@ -182,8 +231,31 @@ class TrashController extends Controller
                     $item->restoreEffects();
                 } elseif ($item instanceof CustomerPayment) {
                     $item->restoreEffect();
+                } elseif ($item instanceof SupplierPayment) {
+                    $item->restoreEffect();
                 }
                 $item->restore();
+                // v2.2: supplier balance sync AFTER restore, so the
+                // restored record is live and counted by syncBalance()
+                // — a trashed PO is excluded from the supplier's
+                // received totals, and a trashed payment from its paid
+                // totals, so syncing before restore would undo itself.
+                // withTrashed so even a restored PO/payment whose
+                // supplier itself still sits in Trash keeps that
+                // supplier's stored balance correct for when the
+                // supplier is restored (the detail page also syncs on
+                // visit, as a second safety net).
+                if ($item instanceof PurchaseOrder) {
+                    $supplier = Supplier::withTrashed()->find($item->supplier_id);
+                    if ($supplier) {
+                        $supplier->syncBalance();
+                    }
+                } elseif ($item instanceof SupplierPayment) {
+                    $supplier = Supplier::withTrashed()->find($item->supplier_id);
+                    if ($supplier) {
+                        $supplier->syncBalance();
+                    }
+                }
             }
         });
     }

@@ -61,7 +61,7 @@
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Net Investment Remaining</div>
         <div class="text-2xl font-bold {{ $netRemaining < 0 ? 'text-red-600' : '' }}">{{ number_format($netRemaining, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1">Investment − Expenses − Liabilities — same figure as "Net Capital" on the Capital Report</div>
+        <div class="text-xs text-gray-400 mt-1">Investment − Expenses − Liabilities (Cash borrowing {{ number_format($totalLiabilities - ($supplierLiabilities ?? 0), 2) }} + Supplier dues {{ number_format($supplierLiabilities ?? 0, 2) }}) — same figure as "Net Capital" on the Capital Report</div>
     </div>
 </div>
 <p class="text-xs text-gray-400 mb-6">These three figures are your current overall standing (as of right now) — the date filter below only controls which past entries show in the table, it doesn't change these.</p>

@@ -34,10 +34,23 @@ class PurchaseOrderItem extends Model
      *  returnable, so remaining returnable is simply the net held
      *  quantity. The gross historical returned total is still available
      *  via returns()->sum('quantity') where a caller needs it (e.g. the
-     *  updateItem() floor guard and the line-delete block check). Always
-     *  check this server-side before accepting a new return for the item. */
+     *  line-delete block check). Always check this server-side before
+     *  accepting a new return for the item.
+     *
+     *  v2.2 (R3) — LEGACY EXCEPTION: returns recorded BEFORE v2.0
+     *  shipped (2026-10-29) never reduced received_quantity, because
+     *  the H8 change did not exist yet. For those rows only, subtract
+     *  them here — otherwise a pre-v2.0 return of 8 units on a line
+     *  received 20 would show 20 returnable instead of 12, and the
+     *  same goods could be returned a second time. Returns from
+     *  2026-10-29 onward are already net in received_quantity and must
+     *  NOT be subtracted again. CAVEAT: a return recorded on the
+     *  install day itself (2026-10-29) before the v2.0 upgrade is
+     *  treated as post-v2.0 by this cutoff — if any such return
+     *  exists, check that line's remaining figure once by hand. */
     public function remainingReturnableQuantity(): float
     {
-        return max(0, (float) $this->received_quantity);
+        $legacyReturned = (float) $this->returns()->where('created_at', '<', '2026-10-29')->sum('quantity');
+        return max(0, (float) $this->received_quantity - $legacyReturned);
     }
 }

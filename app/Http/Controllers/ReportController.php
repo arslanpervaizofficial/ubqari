@@ -9,6 +9,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\PurchaseOrder;
+use App\Models\Supplier;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -409,7 +410,17 @@ class ReportController extends Controller
         // against the business's capital, so it's pulled in here (read-only)
         // for a complete picture. It's still managed entirely on its own
         // Cash Management page; nothing here writes back to it.
-        $totalLiabilities = (float) CashParty::sum('balance');
+        // FIXED 2026-10-29 (v2.2, audit H15 completed): Liabilities used
+        // to be Cash Management borrowing only, so anything owed to
+        // suppliers was invisible. Supplier dues are now the stored
+        // suppliers.balance (kept current by syncBalance() after every
+        // PO receive/correction/delete and supplier return/payment).
+        // Only POSITIVE balances count as liabilities — a negative
+        // balance is an advance paid TO a supplier, not something owed,
+        // and it is deliberately not added to Receivables either (that
+        // would need its own asset treatment; see CHANGES.txt).
+        $supplierLiabilities = (float) Supplier::where('balance', '>', 0)->sum('balance');
+        $totalLiabilities = (float) CashParty::sum('balance') + $supplierLiabilities;
         // Money customers owe THE BUSINESS (a wholesale customer's running
         // tab — credit_balance, raised either by an unpaid due_amount on a
         // real order, or by a manual debit/charge entered on their ledger
@@ -518,7 +529,7 @@ class ReportController extends Controller
         $expenses = (clone $query)->with('user')->latest('expense_date')->latest('id')->get();
 
         return view('reports.capital', compact(
-            'totalInvestment', 'cumulativePurchaseCost', 'remainingInvestment', 'totalExpenses', 'netCapital', 'stockValue', 'cashInjected', 'totalLiabilities', 'totalReceivables', 'customerReceivables', 'walkInDue', 'totalReturnsValue', 'totalReturnsCogs',
+            'totalInvestment', 'cumulativePurchaseCost', 'remainingInvestment', 'totalExpenses', 'netCapital', 'stockValue', 'cashInjected', 'totalLiabilities', 'supplierLiabilities', 'totalReceivables', 'customerReceivables', 'walkInDue', 'totalReturnsValue', 'totalReturnsCogs',
             'totalRevenue', 'approxCogs', 'approxGrossMargin', 'approxNetProfit',
             'monthly', 'year', 'byCategory', 'expenses', 'from', 'to', 'breakdownView', 'month'
         ));

@@ -266,7 +266,7 @@ document.getElementById('product-search').addEventListener('input', function (e)
             products.forEach((p, i) => {
                 const div = document.createElement('div');
                 div.className = 'search-result-item p-2 hover:bg-gray-100 cursor-pointer flex justify-between text-sm';
-                div.innerHTML = `<span>${p.name} (${p.sku})</span><span>${p.stock} ${p.unit} @ ${Number(p.sale_price).toFixed(2)}</span>`;
+                div.innerHTML = `<span>${p.name} (${p.sku})</span><span>${p.available_stock ?? p.stock} ${p.unit} @ ${Number(p.sale_price).toFixed(2)}</span>`;
                 div.onclick = () => addProduct(p.id);
                 box.appendChild(div);
             });
@@ -305,7 +305,10 @@ document.addEventListener('keydown', async function (e) {
             // The common case: the debounced background search already
             // came back and the dropdown is showing — just use it.
             if (!box.classList.contains('hidden') && currentResults.length) {
-                const pick = highlightedIndex >= 0 ? currentResults[highlightedIndex] : currentResults[0];
+                // v2.2 (F4): without a highlighted row, prefer an exact
+                // barcode match over result #1 — a scan must never add
+                // an unrelated first result.
+                const pick = highlightedIndex >= 0 ? currentResults[highlightedIndex] : (currentResults.find(p => p.barcode === q) ?? currentResults[0]);
                 if (pick) addProduct(pick.id);
                 return;
             }
@@ -320,7 +323,10 @@ document.addEventListener('keydown', async function (e) {
                 const res = await fetch(`{{ route('pos.product-search') }}?q=${encodeURIComponent(q)}`, { headers: { 'Accept': 'application/json' } });
                 const products = await res.json();
                 if (products.length) {
-                    addProduct(products[0].id);
+                    // v2.2 (F4): scanner fast path — same exact-barcode
+                    // preference as the dropdown path above.
+                    const exact = products.find(p => p.barcode === q);
+                    addProduct((exact ?? products[0]).id);
                 } else {
                     uiAlert('No product found for "' + q + '"', '⚠️');
                 }

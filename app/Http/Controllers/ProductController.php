@@ -177,10 +177,20 @@ class ProductController extends Controller
         if ((float) $product->stock > 0) {
             return "\"{$product->name}\" disable nahi ho sakta: iski {$product->stock} stock maujood hai. Pehle stock khatam karein ya adjust karein.";
         }
-        if (OrderItem::where('product_id', $product->id)
+        // v2.2 (R11): name the blocking carts — an abandoned held cart
+        // used to block deactivation forever with no way to find it.
+        $blockingOrders = OrderItem::where('product_id', $product->id)
             ->whereHas('order', fn ($q) => $q->whereIn('status', ['in_progress', 'hold']))
-            ->exists()) {
-            return "\"{$product->name}\" disable nahi ho sakta: ye product kisi khuli ya held cart me maujood hai. Pehle wo cart complete ya cancel karein.";
+            ->with('order')
+            ->get()
+            ->map(fn ($i) => $i->order?->order_number)
+            ->filter()
+            ->unique()
+            ->values();
+        if ($blockingOrders->isNotEmpty()) {
+            $shown = $blockingOrders->take(5)->implode(', ');
+            $more = $blockingOrders->count() > 5 ? ' (aur ' . ($blockingOrders->count() - 5) . ' aur)' : '';
+            return "\"{$product->name}\" disable nahi ho sakta: ye product in khuli/held carts me maujood hai: {$shown}{$more}. Pehle wo cart complete ya cancel karein.";
         }
         if (PurchaseOrderItem::where('product_id', $product->id)
             ->whereHas('purchaseOrder', fn ($q) => $q->where('status', 'pending'))
@@ -423,8 +433,10 @@ class ProductController extends Controller
      *  the sheet value is applied as a logged StockMovement adjustment
      *  (new minus old), so stock still reconciles to its movement
      *  history. M8 — if the resulting stock would exceed max_stock
-     *  (the sheet's value when given, else the stored one), the whole
-     *  import is rejected and nothing is applied. */
+     *  (the sheet's value when given, else the stored one), v2.2 (R5)
+     *  skips just that row and reports it — the rest of the import
+     *  still applies. v2.0 rejected the WHOLE import for one stale
+     *  cap, blocking unrelated products. */
     public function import(Request $request)
     {
         $request->validate(['file' => ['required', 'file']]);
@@ -443,9 +455,10 @@ class ProductController extends Controller
         $created = 0;
         $updated = 0;
         $skipped = 0;
+        $blocked = [];
 
         try {
-            DB::transaction(function () use ($rows, &$created, &$updated, &$skipped) {
+            DB::transaction(function () use ($rows, &$created, &$updated, &$skipped, &$blocked) {
                 foreach ($rows as $row) {
                     $name = trim((string) ($row[2] ?? ''));
                     if ($name === '') {
@@ -470,12 +483,14 @@ class ProductController extends Controller
                         // M8 — resulting stock (the sheet value, since the
                         // adjustment brings stock exactly to it) must not
                         // exceed max_stock when one is set.
+                        // v2.2 (R5): skip-and-report just this row — the
+                        // check runs BEFORE any write for this row, so a
+                        // skipped row leaves nothing half-applied, and
+                        // the rest of the import still commits.
                         $effectiveMax = $sheetMaxStock ?? $product->max_stock;
                         if ($effectiveMax !== null && $sheetStock > (float) $effectiveMax) {
-                            throw new \RuntimeException(
-                                "\"{$name}\" ki stock sheet ke mutabiq {$sheetStock} ho jaye gi, jo max stock ({$effectiveMax}) se zyada hai. "
-                                . 'Import rok diya gaya hai, kuch apply nahi hua — max stock barhayein ya sheet theek karein.'
-                            );
+                            $blocked[] = "\"{$name}\" ki stock sheet ke mutabiq {$sheetStock} ho jaye gi, jo max stock ({$effectiveMax}) se zyada hai — max stock barhayein ya sheet theek karein.";
+                            continue;
                         }
                         // Fill in a barcode if this product was somehow created
                         // without one — never overwrites an existing barcode.
@@ -531,6 +546,13 @@ class ProductController extends Controller
         $msg = "Import done — {$updated} product(s) updated, {$created} new product(s) created. Matched products ki Sale Price change nahi hui; stock sheet value ke mutabiq logged adjustment se update hua.";
         if ($skipped) {
             $msg .= " {$skipped} row(s) skipped — no product name.";
+        }
+        if ($blocked) {
+            $shown = array_slice($blocked, 0, 20);
+            $msg .= ' Blocked rows: ' . implode(' | ', $shown);
+            if (count($blocked) > 20) {
+                $msg .= ' (aur ' . (count($blocked) - 20) . ' aur).';
+            }
         }
 
         return back()->with('status', $msg);

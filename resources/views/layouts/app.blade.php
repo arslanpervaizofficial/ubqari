@@ -544,6 +544,32 @@ document.addEventListener('click', function (e) {
         });
     }
 });
+
+// ---------- v2.2 (F7): double-submit guard ----------
+// A double-click on Save used to create two identical money rows
+// (expense, borrow/repay). On the first submit that is not blocked by
+// another handler, disable the submit buttons and remember the form,
+// so a second submit is ignored. Skipped for: confirm-submit forms
+// (their confirm dialog owns that flow, and the programmatic
+// form.submit() after OK does not fire submit listeners anyway),
+// ajax-filter forms (they submit repeatedly by design), and any submit
+// already blocked by an earlier handler (e.defaultPrevented — e.g.
+// failed validation), so fixing a field and resubmitting still works.
+// This listener is capture-phase and registered AFTER the validation
+// handler above, so e.defaultPrevented already reflects it.
+document.addEventListener('submit', function (e) {
+    const form = e.target;
+    if (!form || form.tagName !== 'FORM') return;
+    if (e.defaultPrevented) return;
+    if (form.classList.contains('confirm-submit')) return;
+    if (form.hasAttribute('data-ajax-filter')) return;
+    if (form.dataset.doubleSubmitted === '1') {
+        e.preventDefault();
+        return;
+    }
+    form.dataset.doubleSubmitted = '1';
+    form.querySelectorAll('button[type="submit"], input[type="submit"]').forEach(btn => { btn.disabled = true; });
+}, true);
 </script>
 
 @auth

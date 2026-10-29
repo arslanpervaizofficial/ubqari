@@ -100,10 +100,18 @@ class CashManagementController extends Controller
         // Repair any drift before showing: if the cached balance ever
         // disagreed with the transaction history, this is the page that
         // fixes it (same idea as the customer ledger's syncBalance()).
+        // v2.2 (R6): a correction is no longer silent — the old and new
+        // figures are passed to the view so the page says so.
+        $balanceBefore = (float) $cashParty->balance;
         $cashParty->syncBalance();
         $cashParty->refresh();
-        $transactions = $cashParty->transactions()->with('user')->paginate(20);
-        return view('cash_management.ledger', ['party' => $cashParty, 'transactions' => $transactions]);
+        $balanceCorrected = abs((float) $cashParty->balance - $balanceBefore) > 0.004
+            ? ['old' => $balanceBefore, 'new' => (float) $cashParty->balance]
+            : null;
+        // v2.2 (F8): stable chronological order — pagination without
+        // an order can repeat or skip rows across pages.
+        $transactions = $cashParty->transactions()->with('user')->latest('transaction_date')->latest('id')->paginate(20);
+        return view('cash_management.ledger', ['party' => $cashParty, 'transactions' => $transactions, 'balanceCorrected' => $balanceCorrected]);
     }
 
     /** borrow = you owe them more, balance goes up.
@@ -115,7 +123,9 @@ class CashManagementController extends Controller
         $data = $request->validate([
             'type' => ['required', 'in:borrow,repay'],
             'amount' => ['required', 'numeric', 'min:0.01'],
-            'transaction_date' => ['required', 'date'],
+            // v2.2 (F8/R8): future dates rejected, judged in shop time
+            // (Asia/Karachi), not server time.
+            'transaction_date' => ['required', 'date', 'before_or_equal:' . \Carbon\Carbon::now('Asia/Karachi')->toDateTimeString()],
             'note' => ['nullable', 'string', 'max:255'],
         ]);
 

@@ -40,7 +40,18 @@ class LoginController extends Controller
 
             // The dashboard is now admin/manager-only (H28), so a cashier
             // logging in goes to the register instead of a 403 page.
+            // v2.2 (R10): honour the bookmarked/intended page instead
+            // of always dropping the cashier on the blank POS screen —
+            // except /dashboard itself, which would just 403 (plain
+            // redirect()->intended() would NOT fall back for that case,
+            // it would send the cashier straight to the 403).
             if (Auth::user()->isCashier()) {
+                $intended = session()->get('url.intended');
+                if ($intended && !str_contains($intended, 'dashboard')) {
+                    session()->forget('url.intended');
+                    return redirect()->to($intended);
+                }
+                session()->forget('url.intended');
                 return redirect()->route('pos.index');
             }
             return redirect()->intended(route('dashboard'));

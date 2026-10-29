@@ -497,6 +497,13 @@ class StockReturnController extends Controller
             }
         });
 
+        // v2.2 supplier ledger hook: the return already reduced the PO
+        // line's received_quantity and recomputed the PO total (H8), so
+        // what we owe this supplier has fallen by the returned value —
+        // re-sync it. Returns are NOT subtracted again in syncBalance()
+        // itself, or every return would count twice.
+        Supplier::find($data['supplier_id'])?->syncBalance();
+
         return redirect()->route('stock-returns.index')->with('status', 'Supplier stock return recorded — stock and purchase report updated.');
     }
 

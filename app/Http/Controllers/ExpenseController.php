@@ -6,6 +6,7 @@ use App\Models\CashParty;
 use App\Models\Customer;
 use App\Models\Expense;
 use App\Models\Product;
+use App\Models\Supplier;
 use Illuminate\Http\Request;
 
 class ExpenseController extends Controller
@@ -50,7 +51,13 @@ class ExpenseController extends Controller
         // balances, otherwise this page again drifts from Capital Net.
         $totalReceivables = (float) Customer::sum('credit_balance')
             + (float) \App\Models\Order::whereNull('customer_id')->where('status', 'completed')->sum('due_amount');
-        $totalLiabilities = (float) CashParty::sum('balance');
+        // v2.2, audit H15 completed — same change as ReportController::
+        // capital(), kept identical so the two pages cannot drift apart
+        // again: Liabilities = Cash Management borrowing + supplier dues
+        // (positive suppliers.balance only; a negative balance is an
+        // advance to a supplier, not a liability).
+        $supplierLiabilities = (float) Supplier::where('balance', '>', 0)->sum('balance');
+        $totalLiabilities = (float) CashParty::sum('balance') + $supplierLiabilities;
         $totalInvestment = $stockValue + $cashInjected + $totalReceivables;
         // Cash Out only — Cash In is capital, not an expense (see above).
         $totalExpenses = (float) Expense::where('type', 'cash_out')->sum('amount');
@@ -60,7 +67,7 @@ class ExpenseController extends Controller
             ->with('user')->latest('expense_date')->latest('id')->paginate(20)->withQueryString();
 
         return view('expenses.index', compact(
-            'expenses', 'totalInvestment', 'totalExpenses', 'netRemaining', 'stockValue', 'cashInjected', 'totalReceivables', 'totalLiabilities', 'from', 'to'
+            'expenses', 'totalInvestment', 'totalExpenses', 'netRemaining', 'stockValue', 'cashInjected', 'totalReceivables', 'totalLiabilities', 'supplierLiabilities', 'from', 'to'
         ));
     }
 
@@ -74,19 +81,32 @@ class ExpenseController extends Controller
      *  no longer offers a Cash In option at all. This keeps the
      *  legitimate Cash Management flow working while closing the hole
      *  that let a manager inflate Total Investment from the Expenses
-     *  page. Cash Out entries must now carry both a category and a
-     *  note (an unexplained, uncategorised capital-affecting entry is
-     *  exactly what made old Cash In rows unauditable), and no entry —
-     *  either type — may be dated in the future. */
+     *  page. v2.2 (R7): the v2.0 rule that Cash Out entries must carry
+     *  both a category and a note is REVERTED — a quick cash-out with
+     *  just an amount and a date must save again, as it did originally;
+     *  a missing category now defaults to "General" server-side. No
+     *  entry — either type — may be dated in the future (v2.2, R8:
+     *  judged in shop time, Asia/Karachi, not server time). */
     public function store(Request $request)
     {
         $data = $request->validate([
             'type' => ['required', 'in:cash_in,cash_out'],
             'amount' => ['required', 'numeric', 'min:0.01'],
-            'category' => [$request->input('type') === 'cash_out' ? 'required' : 'nullable', 'string', 'max:100'],
-            'note' => [$request->input('type') === 'cash_out' ? 'required' : 'nullable', 'string', 'max:255'],
-            'expense_date' => ['required', 'date', 'before_or_equal:today'],
+            // v2.2 (R7): category and note are optional again, as in
+            // the original — see the docblock above.
+            'category' => ['nullable', 'string', 'max:100'],
+            'note' => ['nullable', 'string', 'max:255'],
+            // v2.2 (R8): "today" is shop time (Asia/Karachi), so an
+            // expense entered at 01:00–05:00 PKT is not rejected as
+            // "future" when the server runs on UTC.
+            'expense_date' => ['required', 'date', 'before_or_equal:' . \Carbon\Carbon::now('Asia/Karachi')->toDateTimeString()],
         ]);
+
+        // v2.2 (R7): default a missing category server-side so
+        // category-less cash-outs still group under something.
+        if (empty($data['category'])) {
+            $data['category'] = 'General';
+        }
 
         if ($data['type'] === 'cash_in' && $request->input('source') !== 'cash_management') {
             return back()->withErrors(['type' => 'Cash In can only be recorded from the Cash Management page (Add Capital), not from Expenses.'])->withInput();

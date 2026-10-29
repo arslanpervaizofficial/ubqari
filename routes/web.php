@@ -100,6 +100,8 @@ Route::middleware('auth')->group(function () {
         Route::resource('suppliers', SupplierController::class)->except(['show', 'destroy']);
         Route::get('suppliers/{supplier}', [SupplierController::class, 'show'])->name('suppliers.show');
         Route::post('suppliers/{supplier}/toggle-active', [SupplierController::class, 'toggleActive'])->name('suppliers.toggle-active');
+        // v2.2 supplier ledger: payment/credit/debit recording (admin/manager).
+        Route::post('suppliers/{supplier}/payments', [SupplierController::class, 'recordPayment'])->name('suppliers.payments.store');
 
         Route::resource('purchase-orders', PurchaseOrderController::class)->except(['show', 'edit', 'update', 'destroy']);
         Route::get('purchase-orders/{purchaseOrder}', [PurchaseOrderController::class, 'show'])->name('purchase-orders.show');
@@ -175,6 +177,9 @@ Route::middleware('auth')->group(function () {
         Route::post('customers/destroy-all', [CustomerController::class, 'destroyAll'])->name('customers.destroy-all');
 
         Route::delete('suppliers/{supplier}', [SupplierController::class, 'destroy'])->name('suppliers.destroy');
+        // v2.2 supplier ledger: deleting a ledger entry (admin only, like
+        // the customer ledger entry delete just above in spirit).
+        Route::delete('suppliers/{supplier}/payments/{payment}', [SupplierController::class, 'destroyPayment'])->name('suppliers.payments.destroy');
         Route::post('suppliers/destroy-selected', [SupplierController::class, 'destroySelected'])->name('suppliers.destroy-selected');
         Route::post('suppliers/destroy-all', [SupplierController::class, 'destroyAll'])->name('suppliers.destroy-all');
 

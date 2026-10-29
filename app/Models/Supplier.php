@@ -12,34 +12,66 @@ class Supplier extends Model
     protected $fillable = [
         'name', 'phone', 'email', 'address', 'id_card_number',
         'current_address', 'permanent_address', 'image', 'is_active',
+        'balance',
     ];
 
     public function purchaseOrders() { return $this->hasMany(PurchaseOrder::class); }
+    public function payments() { return $this->hasMany(SupplierPayment::class); }
 
-    /** Supplier dues, mirroring Customer::ledgerFigures() — but this is
-     *  deliberately NOT yet a full ledger, and must not be presented as
-     *  one. There is no supplier_payments table and no balance column on
-     *  suppliers, so "paid" is always 0 and "due" currently equals the
-     *  total of received purchase orders. Pending (not yet received)
-     *  orders are reported separately and are NOT part of what is owed.
-     *  Supplier returns (to_supplier) adjust stock only and are not
-     *  netted here either. A real ledger still needs: a migration adding
-     *  supplier_payments (and/or a suppliers.balance column), payment
-     *  recording that updates it, and ReportController including supplier
-     *  dues in Capital Liabilities — see CHANGES.txt for the exact list.
-     *  Until then, treat "due" as "received PO value, before any supplier
-     *  payments", not as a settled amount owed. */
+    /** The one true formula for what WE owe this supplier, mirroring
+     *  Customer::ledgerFigures() (but with the sign flipped to our side):
+     *      balance = received PO totals
+     *              - supplier payments (cash paid to the supplier)
+     *              - supplier credits (credit notes / discounts granted)
+     *              + supplier debits (extra charges by the supplier)
+     *  Positive = we owe the supplier, negative = advance paid to them.
+     *  Pending (not yet received) orders are reported separately and are
+     *  NOT part of what is owed.
+     *
+     *  CRITICAL — no double-counting of supplier returns: v2.0 H8 already
+     *  reduces a PO line's received_quantity (and recomputes the PO total)
+     *  at supplier-return time, so the returned value is ALREADY out of
+     *  the received totals above. Subtracting to_supplier returns here
+     *  again would count every return twice. */
     public function duesFigures(): array
     {
         $received = round((float) $this->purchaseOrders()->where('status', 'received')->sum('total'), 2);
         $pending = round((float) $this->purchaseOrders()->where('status', 'pending')->sum('total'), 2);
-        $paid = 0.0; // No supplier_payments table exists yet (see above).
+        $paid = round((float) $this->payments()->where('type', 'payment')->sum('amount'), 2);
+        $credits = round((float) $this->payments()->where('type', 'credit')->sum('amount'), 2);
+        $debits = round((float) $this->payments()->where('type', 'debit')->sum('amount'), 2);
+        // due comes from the stored balance column (kept current by
+        // syncBalance() after every PO/payment/return event). If the
+        // column is missing (migration not run yet) fall back to the
+        // recomputed figure so the page still shows something sane.
+        $due = $this->balance !== null
+            ? round((float) $this->balance, 2)
+            : round($received - $paid - $credits + $debits, 2);
         return [
             'received_total' => $received,
             'pending_total' => $pending,
-            'paid' => $paid,
-            'due' => round($received - $paid, 2),
+            'paid' => round($paid + $credits, 2),
+            'payments_total' => $paid,
+            'credits' => $credits,
+            'debits' => $debits,
+            'due' => $due,
         ];
+    }
+
+    /** Re-saves balance from the formula above if it drifted — same
+     *  pattern as Customer::syncBalance(). Callers (supplier page,
+     *  payment recording, PO receive/correction/delete, supplier
+     *  returns) call this after the event that moves the balance, so
+     *  the stored column never silently disagrees with the ledger. */
+    public function syncBalance(): array
+    {
+        $f = $this->duesFigures();
+        $computed = round($f['received_total'] - $f['payments_total'] - $f['credits'] + $f['debits'], 2);
+        if ($this->balance === null || abs((float) $this->balance - $computed) > 0.004) {
+            $this->forceFill(['balance' => $computed])->save();
+            $f['due'] = $computed;
+        }
+        return $f;
     }
 
     public function getImageUrlAttribute(): string

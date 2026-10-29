@@ -40,7 +40,7 @@
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Total Liabilities</div>
         <div class="text-2xl font-bold {{ $totalLiabilities > 0 ? 'text-red-600' : '' }}">{{ number_format($totalLiabilities, 2) }}</div>
-        <div class="text-xs text-gray-400 mt-1 capital-hint">Owed to people, from <a href="{{ route('cash-management.index') }}" class="underline">Cash Management</a> — now subtracted below in Net Capital</div>
+        <div class="text-xs text-gray-400 mt-1 capital-hint">Cash borrowing {{ number_format($totalLiabilities - ($supplierLiabilities ?? 0), 2) }} (from <a href="{{ route('cash-management.index') }}" class="underline">Cash Management</a>) + Supplier dues {{ number_format($supplierLiabilities ?? 0, 2) }} (from <a href="{{ route('suppliers.index') }}" class="underline">Suppliers</a>) — now subtracted below in Net Capital</div>
     </div>
     <div class="bg-white p-5 rounded-xl shadow-sm">
         <div class="text-gray-500 text-sm">Total Receivables</div>
