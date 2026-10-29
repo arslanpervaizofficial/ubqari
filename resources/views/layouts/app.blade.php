@@ -124,21 +124,23 @@
                     {{ __('Trash') }}
                 </a>
                 <a href="{{ route('stock-counts.index') }}" class="sidebar-link {{ request()->routeIs('stock-counts.*') ? 'active' : '' }}">
+                    <svg class="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 12h6M9 16h6"/></svg>
                     {{ __('Stock Counts') }}
                 </a>
                 <a href="{{ route('aging.index') }}" class="sidebar-link {{ request()->routeIs('aging.*') ? 'active' : '' }}">
+                    <svg class="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     {{ __('Customer Aging') }}
                 </a>
                 <a href="{{ route('accounting.journal') }}" class="sidebar-link {{ request()->routeIs('accounting.*') ? 'active' : '' }}">
+                    <svg class="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
                     {{ __('Accounting') }}
                 </a>
-                <a href="{{ route('audit-logs.index') }}" class="sidebar-link {{ request()->routeIs('audit-logs.*') ? 'active' : '' }}">
-                    {{ __('Audit Log') }}
-                </a>
                 <a href="{{ route('sms-logs.index') }}" class="sidebar-link {{ request()->routeIs('sms-logs.*') ? 'active' : '' }}">
+                    <svg class="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
                     {{ __('SMS Log') }}
                 </a>
                 <a href="{{ route('dashboard') }}#expiring-soon" class="sidebar-link {{ request()->routeIs('dashboard') ? 'active' : '' }}">
+                    <svg class="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                     {{ __('Batches / Expiry') }}
                 </a>
             @endif
@@ -165,13 +167,6 @@
             <span class="font-bold text-gray-800 md:hidden">{{ $menuTitle }}</span>
             <div class="hidden md:block"></div>
 
-            <!-- Locale switch (Feature 8): EN | اردو, GET route locale.switch -->
-            <div class="flex items-center gap-1 text-sm print:hidden">
-                <a href="{{ route('locale.switch', ['locale' => 'en']) }}" class="{{ app()->getLocale() === 'en' ? 'font-bold text-gray-900' : 'text-gray-500 hover:text-gray-900' }}">EN</a>
-                <span class="text-gray-300">|</span>
-                <a href="{{ route('locale.switch', ['locale' => 'ur']) }}" class="{{ app()->getLocale() === 'ur' ? 'font-bold text-gray-900' : 'text-gray-500 hover:text-gray-900' }}">اردو</a>
-            </div>
-
             <!-- User menu: click avatar/name to open Settings + Logout -->
             <div class="relative" id="user-menu">
                 <button id="user-menu-btn" type="button" class="flex items-center gap-2 focus:outline-none">
@@ -192,6 +187,18 @@
                             {{ __('Project Settings') }}
                         </a>
                     @endif
+                    @if(auth()->user()->role !== 'cashier')
+                        <a href="{{ route('audit-logs.index') }}" class="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                            <svg class="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m-6-8h6M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>
+                            {{ __('Audit Log') }}
+                        </a>
+                    @endif
+                    <div class="flex items-center gap-2 px-4 py-2 text-sm">
+                        <span class="text-gray-400">{{ __('Language') }}</span>
+                        <a href="{{ route('locale.switch', ['locale' => 'en']) }}" class="{{ app()->getLocale() === 'en' ? 'font-bold text-gray-900' : 'text-gray-500 hover:text-gray-900' }}">EN</a>
+                        <span class="text-gray-300">|</span>
+                        <a href="{{ route('locale.switch', ['locale' => 'ur']) }}" class="{{ app()->getLocale() === 'ur' ? 'font-bold text-gray-900' : 'text-gray-500 hover:text-gray-900' }}">اردو</a>
+                    </div>
                     <form method="POST" action="{{ route('logout') }}">
                         @csrf
                         <button type="submit" class="w-full text-left flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50">
