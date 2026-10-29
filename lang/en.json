@@ -858,5 +858,17 @@
   "− Credits": "− Credits",
   "− Payments": "− Payments",
   "⚠ Out of Stock": "⚠ Out of Stock",
-  "Language": "Language"
+  "Language": "Language",
+  "All": "All",
+  "Expiring soon": "Expiring soon",
+  "Expired": "Expired",
+  "Days left": "Days left",
+  "days": "days",
+  "days ago": "days ago",
+  "No batches found": "No batches found",
+  "Search by product or batch no": "Search by product or batch no",
+  "Edit Batch": "Edit Batch",
+  "Batch updated": "Batch updated",
+  "Leave blank for no expiry date. The batch will then not appear in the expiring list.": "Leave blank for no expiry date. The batch will then not appear in the expiring list.",
+  "Only batch number and expiry date can be changed here. Quantity and remaining stock are calculated from receives, sales and returns and cannot be edited by hand.": "Only batch number and expiry date can be changed here. Quantity and remaining stock are calculated from receives, sales and returns and cannot be edited by hand."
 }

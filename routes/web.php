@@ -24,6 +24,7 @@ use App\Http\Controllers\AuditLogController;
 use App\Http\Controllers\OnlinePaymentController;
 use App\Http\Controllers\SmsLogController;
 use App\Http\Controllers\StockCountController;
+use App\Http\Controllers\ProductBatchController;
 use Illuminate\Support\Facades\Route;
 
 // ---------- Guest ----------
@@ -119,6 +120,14 @@ Route::middleware('auth')->group(function () {
         Route::get('products-generate-barcode', [ProductController::class, 'generateBarcode'])->name('products.generate-barcode');
         Route::get('products-export', [ProductController::class, 'export'])->name('products.export');
         Route::post('products-import', [ProductController::class, 'import'])->name('products.import');
+
+        // v3.0.3 — dedicated Batches / Expiry page. The sidebar link used
+        // to jump to dashboard#expiring-soon, but that dashboard section
+        // only renders when an expiring batch exists, so most clicks just
+        // showed the dashboard. This page always exists.
+        Route::get('batches', [ProductBatchController::class, 'index'])->name('batches.index');
+        Route::get('batches/{batch}/edit', [ProductBatchController::class, 'edit'])->name('batches.edit');
+        Route::patch('batches/{batch}', [ProductBatchController::class, 'update'])->name('batches.update');
 
         Route::resource('customers', CustomerController::class)->except(['show', 'destroy']);
         Route::get('customers/{customer}/ledger', [CustomerController::class, 'ledger'])->name('customers.ledger');

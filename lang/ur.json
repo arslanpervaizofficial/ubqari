@@ -858,5 +858,17 @@
   "− Credits": "− کریڈٹس",
   "− Payments": "− ادائیگیاں",
   "⚠ Out of Stock": "⚠ اسٹاک ختم",
-  "Language": "زبان"
+  "Language": "زبان",
+  "All": "تمام",
+  "Expiring soon": "جلد ختم ہونے والے",
+  "Expired": "ختم شدہ",
+  "Days left": "باقی دن",
+  "days": "دن",
+  "days ago": "دن پہلے",
+  "No batches found": "کوئی بیچ نہیں ملا",
+  "Search by product or batch no": "پروڈکٹ یا بیچ نمبر سے تلاش کریں",
+  "Edit Batch": "بیچ میں ترمیم کریں",
+  "Batch updated": "بیچ اپڈیٹ ہو گیا",
+  "Leave blank for no expiry date. The batch will then not appear in the expiring list.": "خالی چھوڑیں اگر کوئی ایکسپائری تاریخ نہیں ہے۔ پھر یہ بیچ ختم ہونے والی فہرست میں نہیں آئے گا۔",
+  "Only batch number and expiry date can be changed here. Quantity and remaining stock are calculated from receives, sales and returns and cannot be edited by hand.": "یہاں صرف بیچ نمبر اور ایکسپائری تاریخ بدلی جا سکتی ہے۔ مقدار اور باقی اسٹاک وصولی، فروخت اور واپسی سے حساب ہوتا ہے اور ہاتھ سے نہیں بدلا جا سکتا۔"
 }

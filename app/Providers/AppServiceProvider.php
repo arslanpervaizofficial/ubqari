@@ -10,6 +10,7 @@ use App\Models\CustomerPayment;
 use App\Models\Expense;
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\ProductBatch;
 use App\Models\PurchaseOrder;
 use App\Models\StockReturn;
 use App\Models\Supplier;
@@ -32,7 +33,8 @@ use Illuminate\Support\ServiceProvider;
  * WHAT IS LOGGED
  * - Model events for: Product, Customer, Supplier, PurchaseOrder,
  *   Order, StockReturn, Expense, CashParty, CashTransaction, User,
- *   SupplierPayment, CustomerPayment.
+ *   SupplierPayment, CustomerPayment, ProductBatch (v3.0.4: batch
+ *   edits — changed batch_no / expiry_date — are audit-logged).
  *   - created:  new_values = the model's attributes.
  *   - updated:  old_values / new_values = CHANGED attributes only
  *     (getChanges() diffed against getOriginal() — never the whole
@@ -170,6 +172,7 @@ class AppServiceProvider extends ServiceProvider
 
         foreach ([
             Product::class,
+            ProductBatch::class,
             Customer::class,
             Supplier::class,
             PurchaseOrder::class,
