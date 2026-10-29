@@ -32,7 +32,7 @@
         <tr class="border-t">
             @if(auth()->user()->role === 'admin')<td class="p-3"><input type="checkbox" data-bulk-item="purchase-orders" value="{{ $po->id }}"></td>@endif
             <td class="p-3">#{{ $po->id }}</td>
-            <td class="p-3">{{ $po->supplier->name }}</td>
+            <td class="p-3">{{ $po->supplier->name ?? '— (deleted supplier)' }}</td>
             <td class="p-3">{{ number_format($po->total, 2) }}</td>
             <td class="p-3">
                 <span class="px-2 py-1 rounded text-xs {{ $po->status === 'received' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700' }}">{{ $po->status }}</span>
@@ -56,10 +56,11 @@
 </div>
 <div class="mt-4">{{ $purchaseOrders->links() }}</div>
 </div>
-@if(session('status') && str_contains(session('status'), 'created.'))
+
+    @if(session('status') && str_contains(session('status'), 'created.'))
     <script>
         // Final PO created — this draft is finished, do not restore it again.
         try { localStorage.removeItem('ubqari_po_draft_' + {{ auth()->id() ?? 0 }}); } catch (e) {}
     </script>
-@endif
+    @endif
 @endsection

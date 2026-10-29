@@ -12,27 +12,38 @@ use Illuminate\Support\Facades\DB;
 class DashboardController extends Controller
 {
     /** Completed sales total for a date, minus the value of any customer returns that same day —
-     *  so a return actually pulls the sales figures back down, not just the stock/ledger. */
+     *  so a return actually pulls the sales figures back down, not just the stock/ledger.
+     *  FIXED (v2, M13): the returns sum used to be quantity × unit_price
+     *  WITHOUT subtracting discount_amount, so every returned item's
+     *  discount was counted as if it were still revenue lost — and the
+     *  max(0, ...) floor then hid genuinely negative days (returns
+     *  outweighing sales) that the Reports hub correctly shows. Both are
+     *  fixed: returns now use the same net_amount formula as the hub
+     *  (quantity × unit_price − discount_amount) and the result is NOT
+     *  floored, so a negative day shows as negative. */
     private function netSalesForDate($date): float
     {
         $sales = (float) Order::where('status', 'completed')->whereDate('created_at', $date)->sum('total');
         $returns = (float) StockReturn::where('type', 'from_customer')
             ->whereDate('created_at', $date)
-            ->selectRaw('SUM(quantity * unit_price) as total')
+            ->selectRaw('SUM(quantity * unit_price - discount_amount) as total')
             ->value('total');
-        return max(0, $sales - $returns);
+        return $sales - $returns;
     }
 
     public function index()
     {
         $todaySales = $this->netSalesForDate(today());
 
+        // Same M13 fix as netSalesForDate() above: net returns (discount
+        // subtracted) and no max(0, ...) floor, so the month figure and
+        // the hub figure use the same formula.
         $monthSales = (float) Order::where('status', 'completed')->whereMonth('created_at', now()->month)->whereYear('created_at', now()->year)->sum('total');
         $monthReturns = (float) StockReturn::where('type', 'from_customer')
             ->whereMonth('created_at', now()->month)->whereYear('created_at', now()->year)
-            ->selectRaw('SUM(quantity * unit_price) as total')
+            ->selectRaw('SUM(quantity * unit_price - discount_amount) as total')
             ->value('total');
-        $monthSales = max(0, $monthSales - $monthReturns);
+        $monthSales = $monthSales - $monthReturns;
 
         $lowStock = Product::active()->whereColumn('stock', '<=', 'min_stock')->whereNotNull('min_stock')->get();
         $outOfStock = Product::active()->where('stock', '<=', 0)->get();

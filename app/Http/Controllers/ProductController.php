@@ -2,8 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
+use App\Models\PurchaseOrderItem;
+use App\Models\StockMovement;
 use App\Support\SimpleXlsx;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -92,7 +95,16 @@ class ProductController extends Controller
         }
         unset($data['new_category']);
 
-        Product::create($data);
+        $product = Product::create($data);
+
+        // M7 — opening price at creation, so the price-history page
+        // shows where this product's sale price started.
+        ProductPriceHistory::create([
+            'product_id' => $product->id,
+            'old_price' => 0,
+            'new_price' => $product->sale_price,
+            'changed_by' => auth()->id(),
+        ]);
 
         return redirect()->route('products.index')->with('status', 'Product added.');
     }
@@ -105,10 +117,23 @@ class ProductController extends Controller
 
     public function update(Request $request, Product $product)
     {
-        $data = $request->validate(array_merge($this->rules($product->id), [
+        // H10 — stock is validated (so a negative value is still
+        // rejected) but never mass-assigned here: it is removed from
+        // the updatable data, and a submitted change is routed through
+        // a logged StockMovement adjustment instead, so the stock
+        // figure always reconciles to its movement history with a
+        // reason and a user attached. The form field still exists for
+        // create() (opening stock) and for edit it now means "set stock
+        // to this value, logged as an adjustment".
+        $rules = $this->rules($product->id);
+        unset($rules['stock']);
+        $data = $request->validate(array_merge($rules, [
             'sku' => ['required', 'string', 'unique:products,sku,' . $product->id],
             'barcode' => ['nullable', 'string', 'unique:products,barcode,' . $product->id],
+            'stock' => ['nullable', 'numeric', 'min:0'],
         ]));
+        $submittedStock = $data['stock'] ?? null;
+        unset($data['stock']);
 
         if (!empty($data['new_category'])) {
             $data['category'] = $data['new_category'];
@@ -126,29 +151,96 @@ class ProductController extends Controller
 
         $product->update($data);
 
+        if ($submittedStock !== null && $submittedStock !== '' && (float) $submittedStock !== (float) $product->fresh()->stock) {
+            $oldStock = (float) $product->fresh()->stock;
+            $delta = (float) $submittedStock - $oldStock;
+            StockMovement::create([
+                'product_id' => $product->id,
+                'type' => 'adjustment',
+                'quantity' => $delta,
+                'reason' => "Manual stock correction from product form ({$oldStock} → {$submittedStock})",
+                'user_id' => auth()->id(),
+            ]);
+            $product->increment('stock', $delta);
+        }
+
         return redirect()->route('products.index')->with('status', 'Product updated.');
+    }
+
+    /** M8 — why a product may NOT be deactivated right now, or null when
+     *  it may. Deactivation used to be a bare is_active=false even with
+     *  stock on hand, a live cart holding the product, or a pending PO
+     *  for it — and the product then kept moving through held carts
+     *  and PO receiving while hidden from billing and the PO picker. */
+    private function deactivationBlockReason(Product $product): ?string
+    {
+        if ((float) $product->stock > 0) {
+            return "\"{$product->name}\" disable nahi ho sakta: iski {$product->stock} stock maujood hai. Pehle stock khatam karein ya adjust karein.";
+        }
+        if (OrderItem::where('product_id', $product->id)
+            ->whereHas('order', fn ($q) => $q->whereIn('status', ['in_progress', 'hold']))
+            ->exists()) {
+            return "\"{$product->name}\" disable nahi ho sakta: ye product kisi khuli ya held cart me maujood hai. Pehle wo cart complete ya cancel karein.";
+        }
+        if (PurchaseOrderItem::where('product_id', $product->id)
+            ->whereHas('purchaseOrder', fn ($q) => $q->where('status', 'pending'))
+            ->exists()) {
+            return "\"{$product->name}\" disable nahi ho sakta: is product ka aik pending purchase order maujood hai. Pehle wo PO receive ya delete karein.";
+        }
+        return null;
     }
 
     /** Soft-disable instead of hard delete — keeps historical order/ledger data intact. */
     public function destroy(Product $product)
     {
+        if ($reason = $this->deactivationBlockReason($product)) {
+            return back()->withErrors(['error' => $reason]);
+        }
         $product->update(['is_active' => false]);
         return back()->with('status', "{$product->name} disabled and hidden from Products/Billing. You can reactivate it anytime from the Disabled filter.");
     }
 
-    /** Bulk-disable the checked rows (same effect as destroy(), just for many at once). */
+    /** Bulk-disable the checked rows (same effect as destroy(), just for many at once).
+     *  Blocked rows are skipped with their reasons reported, not silently disabled. */
     public function destroySelected(Request $request)
     {
         $ids = (array) $request->input('ids', []);
-        $count = Product::whereIn('id', $ids)->update(['is_active' => false]);
-        return back()->with('status', "{$count} product(s) disabled. You can reactivate them anytime from the Disabled filter.");
+        $count = 0;
+        $blocked = [];
+        foreach (Product::whereIn('id', $ids)->get() as $product) {
+            if ($reason = $this->deactivationBlockReason($product)) {
+                $blocked[] = $product->name;
+                continue;
+            }
+            $product->update(['is_active' => false]);
+            $count++;
+        }
+        $msg = "{$count} product(s) disabled. You can reactivate them anytime from the Disabled filter.";
+        if ($blocked) {
+            $msg .= ' Blocked (stock/cart/pending PO): ' . implode(', ', $blocked) . '.';
+        }
+        return back()->with('status', $msg);
     }
 
-    /** Disables every product matching the CURRENT search/category filter. */
+    /** Disables every product matching the CURRENT search/category filter.
+     *  Blocked rows are skipped with their reasons reported. */
     public function destroyAll(Request $request)
     {
-        $count = $this->filteredQuery($request)->update(['is_active' => false]);
-        return back()->with('status', "{$count} product(s) disabled. You can reactivate them anytime from the Disabled filter.");
+        $count = 0;
+        $blocked = [];
+        foreach ($this->filteredQuery($request)->get() as $product) {
+            if ($reason = $this->deactivationBlockReason($product)) {
+                $blocked[] = $product->name;
+                continue;
+            }
+            $product->update(['is_active' => false]);
+            $count++;
+        }
+        $msg = "{$count} product(s) disabled. You can reactivate them anytime from the Disabled filter.";
+        if ($blocked) {
+            $msg .= ' Blocked (stock/cart/pending PO): ' . implode(', ', $blocked) . '.';
+        }
+        return back()->with('status', $msg);
     }
 
     public function reactivate(Product $product)
@@ -316,11 +408,23 @@ class ProductController extends Controller
 
     /** Upserts products from a price-list .xlsx in the same layout as
      *  export() — matched by Product Name (case-insensitive, trimmed).
-     *  Matched products get Category/Rate/Stock/Min/Max/Discount updated;
+     *  Matched products get Category/Rate/Min/Max/Discount updated;
      *  unmatched rows create a new product instead. Nothing is ever
      *  deleted here, and no product is skipped just for being "different"
      *  from the sheet — every row either updates its match or creates a
-     *  new product, so re-running the same file twice is always safe. */
+     *  new product, so re-running the same file twice is always safe.
+     *
+     *  H11 — a matched product's Sale Price is NEVER touched here: the
+     *  sheet has no sale-price column, and the old code set
+     *  sale_price = purchase_price on every row, silently destroying
+     *  every selling margin on every re-import. Only a NEW product gets
+     *  sale_price = the sheet's Rate (as its opening price).
+     *  H10 — a matched product's stock is NEVER overwritten absolutely:
+     *  the sheet value is applied as a logged StockMovement adjustment
+     *  (new minus old), so stock still reconciles to its movement
+     *  history. M8 — if the resulting stock would exceed max_stock
+     *  (the sheet's value when given, else the stored one), the whole
+     *  import is rejected and nothing is applied. */
     public function import(Request $request)
     {
         $request->validate(['file' => ['required', 'file']]);
@@ -340,57 +444,91 @@ class ProductController extends Controller
         $updated = 0;
         $skipped = 0;
 
-        DB::transaction(function () use ($rows, &$created, &$updated, &$skipped) {
-            foreach ($rows as $row) {
-                $name = trim((string) ($row[2] ?? ''));
-                if ($name === '') {
-                    $skipped++;
-                    continue;
-                }
-
-                $attributes = [
-                    'category' => trim((string) ($row[1] ?? '')) ?: null,
-                    'purchase_price' => is_numeric($row[3] ?? null) ? (float) $row[3] : 0,
-                    'stock' => is_numeric($row[4] ?? null) ? (float) $row[4] : 0,
-                    'min_stock' => is_numeric($row[5] ?? null) ? (float) $row[5] : null,
-                    'max_stock' => is_numeric($row[6] ?? null) ? (float) $row[6] : null,
-                    'purchase_discount_percent' => is_numeric($row[7] ?? null) ? (float) $row[7] : 0,
-                    'max_discount_percent' => is_numeric($row[8] ?? null) ? (float) $row[8] : 0,
-                ];
-                // Sale Price = the sheet's Rate, as-is — NOT reduced by the
-                // Purchase Discount %. That discount is what we get from
-                // the supplier and can differ on every Purchase Order
-                // (there's a separate discount field for it there, next to
-                // Cost) — it has nothing to do with what we charge
-                // customers. A walk-in customer's default discount is 0%;
-                // if one's actually given, it's applied live in Billing,
-                // never baked into the stored Sale Price.
-                $attributes['sale_price'] = $attributes['purchase_price'];
-
-                $product = Product::whereRaw('LOWER(name) = ?', [mb_strtolower($name)])->first();
-
-                if ($product) {
-                    // Fill in a barcode if this product was somehow created
-                    // without one — never overwrites an existing barcode.
-                    if (!$product->barcode) {
-                        $attributes['barcode'] = $this->generateUniqueBarcode();
+        try {
+            DB::transaction(function () use ($rows, &$created, &$updated, &$skipped) {
+                foreach ($rows as $row) {
+                    $name = trim((string) ($row[2] ?? ''));
+                    if ($name === '') {
+                        $skipped++;
+                        continue;
                     }
-                    $product->update($attributes);
-                    $updated++;
-                } else {
-                    Product::create(array_merge($attributes, [
-                        'name' => $name,
-                        'sku' => $this->generateUniqueSku($attributes['category']),
-                        'barcode' => $this->generateUniqueBarcode(),
-                        'unit' => 'piece',
-                        'is_active' => true,
-                    ]));
-                    $created++;
-                }
-            }
-        });
 
-        $msg = "Import done — {$updated} product(s) updated, {$created} new product(s) created. Sale Price is set to the sheet's Rate for every row (matched or new) — adjust manually afterward for any product you charge differently.";
+                    $sheetStock = is_numeric($row[4] ?? null) ? (float) $row[4] : 0;
+                    $sheetMaxStock = is_numeric($row[6] ?? null) ? (float) $row[6] : null;
+                    $attributes = [
+                        'category' => trim((string) ($row[1] ?? '')) ?: null,
+                        'purchase_price' => is_numeric($row[3] ?? null) ? (float) $row[3] : 0,
+                        'min_stock' => is_numeric($row[5] ?? null) ? (float) $row[5] : null,
+                        'max_stock' => $sheetMaxStock,
+                        'purchase_discount_percent' => is_numeric($row[7] ?? null) ? (float) $row[7] : 0,
+                        'max_discount_percent' => is_numeric($row[8] ?? null) ? (float) $row[8] : 0,
+                    ];
+
+                    $product = Product::whereRaw('LOWER(name) = ?', [mb_strtolower($name)])->first();
+
+                    if ($product) {
+                        // M8 — resulting stock (the sheet value, since the
+                        // adjustment brings stock exactly to it) must not
+                        // exceed max_stock when one is set.
+                        $effectiveMax = $sheetMaxStock ?? $product->max_stock;
+                        if ($effectiveMax !== null && $sheetStock > (float) $effectiveMax) {
+                            throw new \RuntimeException(
+                                "\"{$name}\" ki stock sheet ke mutabiq {$sheetStock} ho jaye gi, jo max stock ({$effectiveMax}) se zyada hai. "
+                                . 'Import rok diya gaya hai, kuch apply nahi hua — max stock barhayein ya sheet theek karein.'
+                            );
+                        }
+                        // Fill in a barcode if this product was somehow created
+                        // without one — never overwrites an existing barcode.
+                        if (!$product->barcode) {
+                            $attributes['barcode'] = $this->generateUniqueBarcode();
+                        }
+                        $oldStock = (float) $product->stock;
+                        $product->update($attributes);
+                        // H10 — stock as a logged adjustment delta, not
+                        // an absolute overwrite.
+                        $delta = $sheetStock - $oldStock;
+                        if ($delta != 0.0) {
+                            StockMovement::create([
+                                'product_id' => $product->id,
+                                'type' => 'adjustment',
+                                'quantity' => $delta,
+                                'reason' => "Excel import stock adjustment ({$oldStock} → {$sheetStock})",
+                                'user_id' => auth()->id(),
+                            ]);
+                            $product->increment('stock', $delta);
+                        }
+                        $updated++;
+                    } else {
+                        // New product only: sale_price starts at the
+                        // sheet's Rate (NOT reduced by the Purchase
+                        // Discount % — that discount is what we get from
+                        // the supplier, it has nothing to do with what we
+                        // charge customers), and opening stock is the
+                        // sheet value. M7 — opening price history row.
+                        $newProduct = Product::create(array_merge($attributes, [
+                            'name' => $name,
+                            'sku' => $this->generateUniqueSku($attributes['category']),
+                            'barcode' => $this->generateUniqueBarcode(),
+                            'unit' => 'piece',
+                            'is_active' => true,
+                            'stock' => $sheetStock,
+                            'sale_price' => $attributes['purchase_price'],
+                        ]));
+                        ProductPriceHistory::create([
+                            'product_id' => $newProduct->id,
+                            'old_price' => 0,
+                            'new_price' => $newProduct->sale_price,
+                            'changed_by' => auth()->id(),
+                        ]);
+                        $created++;
+                    }
+                }
+            });
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['file' => $e->getMessage()]);
+        }
+
+        $msg = "Import done — {$updated} product(s) updated, {$created} new product(s) created. Matched products ki Sale Price change nahi hui; stock sheet value ke mutabiq logged adjustment se update hua.";
         if ($skipped) {
             $msg .= " {$skipped} row(s) skipped — no product name.";
         }

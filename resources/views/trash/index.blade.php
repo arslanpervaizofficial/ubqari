@@ -7,7 +7,7 @@
 <div class="flex gap-2 mb-4 flex-wrap">
     @foreach($types as $slug => $t)
         <button type="button" class="btn trash-tab-btn {{ $loop->first ? 'btn-dark' : 'btn-gray' }}" data-trash-tab="{{ $slug }}">
-            {{ $t['label'] }} ({{ $trashed[$slug]->count() }})
+            {{ $t['label'] }} ({{ $trashedCounts[$slug] ?? $trashed[$slug]->count() }})
         </button>
     @endforeach
 </div>
@@ -17,6 +17,10 @@
     @if($trashed[$slug]->isEmpty())
         <div class="bg-white rounded-xl shadow-sm p-6 text-gray-400 text-sm">Nothing in Trash here.</div>
     @else
+        {{-- FIXED (v2, M16): only the latest 200 rows per type are listed (see TrashController::index), so when there are more, say so — and say that Restore All / Permanently Delete All still cover the rows not shown, since those actions work on the full trashed set, not this capped list. --}}
+        @if(($trashedCounts[$slug] ?? $trashed[$slug]->count()) > $trashed[$slug]->count())
+            <p class="text-xs text-gray-500 mb-3">Showing the latest {{ $trashed[$slug]->count() }} of {{ $trashedCounts[$slug] }} trashed items. "Restore All" / "Permanently Delete All" below still apply to all {{ $trashedCounts[$slug] }}, including the ones not listed here.</p>
+        @endif
         <div class="flex items-center gap-2 mb-3 flex-wrap">
             <span data-bulk-count="trash-{{ $slug }}" class="text-sm text-gray-500"></span>
             <button type="button" class="btn btn-solid-green" data-bulk-submit="trash-{{ $slug }}"
@@ -55,7 +59,9 @@
                 <tr class="border-t">
                     <td class="p-3"><input type="checkbox" data-bulk-item="trash-{{ $slug }}" value="{{ $item->id }}"></td>
                     <td class="p-3">
-                        @if($slug === 'customers' || $slug === 'suppliers')
+                        @if($slug === 'cash-parties')
+                            <span class="font-medium">{{ $item->name }}</span> <span class="text-gray-400">Balance {{ number_format($item->balance, 2) }}</span>
+                        @elseif($slug === 'customers' || $slug === 'suppliers')
                             <span class="font-medium">{{ $item->name }}</span> <span class="text-gray-400">{{ $item->phone }}</span>
                         @elseif($slug === 'orders')
                             <span class="font-medium">{{ $item->order_number }}</span>

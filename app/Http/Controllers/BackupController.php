@@ -6,6 +6,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 
 class BackupController extends Controller
 {
@@ -25,6 +27,13 @@ class BackupController extends Controller
         'suppliers',
         'orders',
         'order_items',
+        // FIXED (v2, H18): order_payments used to be missing from this
+        // list, so a "full" backup silently dropped the whole order
+        // ledger (walk-in order payments) and a restore left the old
+        // order_payments rows sitting against restored orders whose
+        // paid/due amounts no longer matched them. It is scoped through
+        // its parent order in rangeRows() below, like order_items.
+        'order_payments',
         'purchase_orders',
         'purchase_order_items',
         'stock_movements',
@@ -33,6 +42,10 @@ class BackupController extends Controller
         'expenses',
         'cash_parties',
         'cash_transactions',
+        // FIXED (v2, H18): app_settings was also missing, even though
+        // reset() deletes it — so a full restore never brought settings
+        // back. It has no foreign keys, so it sits last in insert order.
+        'app_settings',
     ];
 
     /** Reference/master data — always exported in full, even for a
@@ -107,6 +120,13 @@ class BackupController extends Controller
                 'order_id',
                 DB::table('orders')->whereBetween('created_at', [$from, $to])->pluck('id')
             ),
+            // FIXED (v2, H18): order ledger rows have no date of their
+            // own, so like order_items they are scoped through their
+            // parent order's created_at.
+            'order_payments' => DB::table('order_payments')->whereIn(
+                'order_id',
+                DB::table('orders')->whereBetween('created_at', [$from, $to])->pluck('id')
+            ),
             'purchase_order_items' => DB::table('purchase_order_items')->whereIn(
                 'purchase_order_id',
                 DB::table('purchase_orders')->whereBetween('created_at', [$from, $to])->pluck('id')
@@ -124,9 +144,64 @@ class BackupController extends Controller
         return $query->get()->map(fn ($row) => (array) $row)->all();
     }
 
+    /** For a range restore: the ids of master rows that the range's own
+     *  transactional rows in the uploaded file actually reference.
+     *  Built from the FILE's rows (not the live database), so a master
+     *  row is only ever restored when the restored window genuinely
+     *  needs it to exist:
+     *   - customers: orders.customer_id, stock_returns.customer_id,
+     *     customer_payments.customer_id
+     *   - suppliers: purchase_orders.supplier_id,
+     *     stock_returns.supplier_id
+     *   - products: order_items.product_id,
+     *     purchase_order_items.product_id, stock_movements.product_id,
+     *     stock_returns.product_id
+     *   - cash_parties: cash_transactions.cash_party_id
+     *  users are deliberately absent: they are never merged in range
+     *  mode at all, so no referenced-users set is built. Rows in the
+     *  file with no id, or referencing columns that are null, are
+     *  ignored. */
+    private function rangeReferencedMasters(array $tables): array
+    {
+        $referenced = [
+            'products' => [],
+            'customers' => [],
+            'suppliers' => [],
+            'cash_parties' => [],
+        ];
+        $collect = function (string $table, string $column, string $master) use ($tables, &$referenced) {
+            foreach ($tables[$table] ?? [] as $row) {
+                if (is_array($row) && isset($row[$column]) && $row[$column] !== null) {
+                    $referenced[$master][] = $row[$column];
+                }
+            }
+        };
+        $collect('orders', 'customer_id', 'customers');
+        $collect('stock_returns', 'customer_id', 'customers');
+        $collect('customer_payments', 'customer_id', 'customers');
+        $collect('purchase_orders', 'supplier_id', 'suppliers');
+        $collect('stock_returns', 'supplier_id', 'suppliers');
+        $collect('order_items', 'product_id', 'products');
+        $collect('purchase_order_items', 'product_id', 'products');
+        $collect('stock_movements', 'product_id', 'products');
+        $collect('stock_returns', 'product_id', 'products');
+        $collect('cash_transactions', 'cash_party_id', 'cash_parties');
+        foreach ($referenced as $master => $ids) {
+            $referenced[$master] = array_values(array_unique($ids));
+        }
+        return $referenced;
+    }
+
     /** Restores an uploaded backup file. A "full" backup wipes and replaces
-     *  the 12 managed tables. A "range" backup merges (upsert by id) so it
-     *  never destroys data outside the backed-up window. */
+     *  the managed tables. A "range" backup merges (upsert by id) so it
+     *  never destroys data outside the backed-up window — with two
+     *  FIXED (v2, H19) limits on that merge: the users table is NEVER
+     *  upserted in range mode (restoring a week's sales used to revert
+     *  password changes and reactivate deactivated users), and master
+     *  tables (products, customers, suppliers, cash_parties) are only
+     *  upserted for rows actually referenced by the range's own
+     *  transactional rows in the file, instead of every master row the
+     *  file happens to carry in full. */
     public function restore(Request $request)
     {
         $request->validate([
@@ -145,6 +220,12 @@ class BackupController extends Controller
         // Only ever touch tables we recognise — never let an uploaded file
         // dictate arbitrary table names.
         $tables = array_intersect_key($data['tables'], array_flip(self::TABLES));
+
+        // FIXED (v2, H19): for range restores, work out once which
+        // master rows the range's transactional rows actually point at
+        // (see rangeReferencedMasters() below). Anything else in the
+        // file's master sections is ignored in range mode.
+        $referencedMasters = $type === 'range' ? $this->rangeReferencedMasters($tables) : [];
 
         DB::beginTransaction();
         try {
@@ -171,6 +252,21 @@ class BackupController extends Controller
                 } else {
                     // Merge instead of wiping, so a partial/range restore
                     // never destroys data outside the backed-up window.
+                    // FIXED (v2, H19): users are never merged in range
+                    // mode, and master rows are merged only when the
+                    // range's own transactional rows reference them.
+                    if ($table === 'users') {
+                        continue;
+                    }
+                    if (in_array($table, ['products', 'customers', 'suppliers', 'cash_parties'], true)) {
+                        $allowedIds = $referencedMasters[$table] ?? [];
+                        foreach ($tables[$table] as $row) {
+                            if (!is_array($row) || !isset($row['id'])) continue;
+                            if (!in_array($row['id'], $allowedIds, false)) continue;
+                            DB::table($table)->updateOrInsert(['id' => $row['id']], $row);
+                        }
+                        continue;
+                    }
                     foreach ($tables[$table] as $row) {
                         if (!is_array($row) || !isset($row['id'])) continue;
                         DB::table($table)->updateOrInsert(['id' => $row['id']], $row);
@@ -208,9 +304,16 @@ class BackupController extends Controller
      *  a backup taken beforehand).
      *
      *  Wiping the users table would otherwise lock everyone out for good,
-     *  so a single default admin account is recreated afterward — same
-     *  credentials as a brand-new install — and the current session is
-     *  ended so whoever resets it has to log back in with it. */
+     *  so a single admin account is recreated afterward — but FIXED
+     *  (v2, H20): it NO LONGER uses a known default password, and the
+     *  credentials are NO LONGER printed on the backup page or in a
+     *  reusable flash message. Instead a random one-time password is
+     *  generated, shown exactly once in the flash message after the
+     *  reset, and the account is flagged must_change_password (when
+     *  that column exists — guarded by Schema::hasColumn so this file
+     *  still works before the migration that adds the column is run).
+     *  The current session is ended so whoever resets it has to log
+     *  back in with the one-time password. */
     public function reset(Request $request)
     {
         $request->validate([
@@ -238,16 +341,27 @@ class BackupController extends Controller
             }
             DB::table('app_settings')->delete();
 
-            DB::table('users')->insert([
+            // FIXED (v2, H20): one-time random password, never a known
+            // default. It is returned to the caller below and shown once
+            // in the flash message; it is not stored anywhere in plain
+            // text and is not printed on any page.
+            $oneTimePassword = Str::random(16);
+            $admin = [
                 'name' => 'Admin',
                 'username' => 'admin',
                 'email' => 'admin@ubqari.pos',
-                'password' => Hash::make('password'),
+                'password' => Hash::make($oneTimePassword),
                 'role' => 'admin',
                 'is_active' => 1,
                 'created_at' => now(),
                 'updated_at' => now(),
-            ]);
+            ];
+            // Set by the separate migration agent; guarded so reset()
+            // does not crash on databases where the column is absent.
+            if (Schema::hasColumn('users', 'must_change_password')) {
+                $admin['must_change_password'] = true;
+            }
+            DB::table('users')->insert($admin);
 
             DB::statement('SET FOREIGN_KEY_CHECKS=1');
             DB::commit();
@@ -261,6 +375,9 @@ class BackupController extends Controller
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 
-        return redirect()->route('login')->with('status', 'Database has been fully reset. Log in with the default admin account — admin@ubqari.pos / password — and change the password right away.');
+        // Shown exactly once, here and nowhere else (not on the backup
+        // page, not in any reusable message). The admin must change it
+        // on first login (must_change_password flag above).
+        return redirect()->route('login')->with('status', 'Database has been fully reset. Your one-time admin password is: ' . $oneTimePassword . ' — copy it now, it will not be shown again. Log in as admin@ubqari.pos and change the password right away.');
     }
 }

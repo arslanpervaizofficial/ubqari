@@ -116,7 +116,13 @@
 
             <div id="single-amount">
                 <label class="block text-sm mb-1">Amount Paid</label>
-                <input type="number" step="0.01" name="paid_amount" class="w-full border rounded px-3 py-2 mb-3" value="{{ $order->total }}">
+                {{-- FIXED (M1): when editing a completed order, default to
+                     the ORIGINAL paid amount, not the (possibly changed)
+                     total — otherwise the customer's overpayment advance
+                     silently disappears on re-completion unless the
+                     cashier remembers to re-type it. Fresh carts still
+                     default to the total. --}}
+                <input type="number" step="0.01" name="paid_amount" class="w-full border rounded px-3 py-2 mb-3" value="{{ $order->original_completed_at ? ($order->paid_amount ?? $order->total) : $order->total }}">
             </div>
             <div id="split-amounts" class="hidden">
                 <label class="block text-sm mb-1">Cash Amount</label>
@@ -200,7 +206,10 @@ function renderOrder(order) {
     document.getElementById('discount').textContent = Number(order.discount_amount).toFixed(2);
     document.getElementById('total').textContent = Number(order.total).toFixed(2);
     document.getElementById('overall-discount').value = order.discount_percent;
-    document.querySelector('#checkout-modal input[name="paid_amount"]').value = order.total;
+    // FIXED (M1): same rule as the server-rendered default above — when
+    // editing a completed order, keep the original paid amount as the
+    // checkout default so an advance is not silently dropped.
+    document.querySelector('#checkout-modal input[name="paid_amount"]').value = order.original_completed_at ? (order.paid_amount ?? order.total) : order.total;
 
     // Previous outstanding balance (or advance) this customer already
     // carries, shown alongside this bill's own total — separate from it,
@@ -437,7 +446,9 @@ document.getElementById('cart-body').addEventListener('change', async function (
         }
         document.getElementById('unit-count').textContent = data.order.items.reduce((sum, i) => sum + Number(i.quantity), 0);
         const paidInput = document.querySelector('#checkout-modal input[name="paid_amount"]');
-        if (paidInput) paidInput.value = data.order.total;
+        // FIXED (M1): qty/discount edits must not reset the checkout
+        // default back to the total on an order being edited.
+        if (paidInput) paidInput.value = data.order.original_completed_at ? (data.order.paid_amount ?? data.order.total) : data.order.total;
     } catch (err) { uiAlert(err.message, "⚠️"); }
 });
 

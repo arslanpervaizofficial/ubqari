@@ -14,6 +14,9 @@ class Order extends Model
         'order_number', 'customer_id', 'user_id', 'status',
         'subtotal', 'line_discount_total', 'discount_percent', 'discount_amount', 'total',
         'paid_amount', 'due_amount', 'payment_method', 'bank_name', 'transaction_id', 'is_quotation',
+        // Split-payment breakdown persisted by POSController::complete()
+        // (H23-part); columns are created by the migration package.
+        'cash_amount', 'bank_amount',
         'original_completed_at',
     ];
 
@@ -71,8 +74,18 @@ class Order extends Model
             return;
         }
 
+        // FIXED (H3): the full line quantity used to be added back even
+        // when the customer had already returned part of it — and the
+        // return had already put those units back on the shelf — so stock
+        // was overstated by the returned quantity (e.g. sold 10, returned
+        // 4, delete added back 10). Only the NET quantity still out
+        // (sold minus already returned) is added back. Note: the linked
+        // return records themselves are left in place (not voided) — that
+        // is a deliberate product decision to record separately, not an
+        // oversight; the stock math here is correct either way.
         foreach ($this->items()->with('product')->get() as $item) {
-            $item->product->increment('stock', $item->quantity);
+            $netQty = max(0, $item->quantity - $item->returns()->sum('quantity'));
+            $item->product->increment('stock', $netQty);
         }
 
         StockMovement::where('order_id', $this->id)->where('type', 'sale')->delete();
@@ -96,15 +109,24 @@ class Order extends Model
             return;
         }
 
+        // FIXED (H3): mirror of reverseCompletedEffects() — only the NET
+        // quantity still out (sold minus already returned) is deducted
+        // again, and the recreated sale movement carries that net
+        // quantity, so the movement history matches the stock change. A
+        // fully-returned line deducts nothing and writes no 0-qty
+        // movement.
         foreach ($this->items()->with('product')->get() as $item) {
-            $item->product->decrement('stock', $item->quantity);
-            StockMovement::create([
-                'product_id' => $item->product_id,
-                'type' => 'sale',
-                'quantity' => -$item->quantity,
-                'user_id' => auth()->id(),
-                'order_id' => $this->id,
-            ]);
+            $netQty = max(0, $item->quantity - $item->returns()->sum('quantity'));
+            $item->product->decrement('stock', $netQty);
+            if ($netQty > 0) {
+                StockMovement::create([
+                    'product_id' => $item->product_id,
+                    'type' => 'sale',
+                    'quantity' => -$netQty,
+                    'user_id' => auth()->id(),
+                    'order_id' => $this->id,
+                ]);
+            }
         }
 
         if ($this->customer_id && abs($this->due_amount) > 0.004) {

@@ -36,15 +36,33 @@ class CustomerController extends Controller
         return view('customers.create');
     }
 
+    /** Normalise a phone number to digits only ("0300-123 4567" and
+     *  "03001234567" are the same number). store()/update() merge the
+     *  normalised value into the request BEFORE validation, so the
+     *  uniqueness rule below compares digits-only values and the stored
+     *  value is normalised too. A database unique index on the column is
+     *  still needed as the final guard (see CHANGES.txt) — validation
+     *  alone cannot stop a race between two simultaneous creates. */
+    private static function normalisePhone($phone): string
+    {
+        if (!is_string($phone)) {
+            return '';
+        }
+        return preg_replace('/[^0-9]/', '', $phone) ?? '';
+    }
+
     /** $id excludes the record being edited from the email uniqueness
      *  check — same pattern as ProductController's sku/barcode and
      *  UserController's username/email — so updating a customer without
-     *  changing their own email doesn't flag itself as a duplicate. */
+     *  changing their own email doesn't flag itself as a duplicate.
+     *  Phone has the same treatment: the normalised (digits-only) value
+     *  must be unique, so one party's ledger cannot silently split
+     *  across two customer rows entered with different formatting. */
     private function rules($id = null): array
     {
         return [
             'name' => ['required', 'string', 'max:255'],
-            'phone' => ['required', 'string', 'regex:/^[0-9+\-\s]{7,15}$/'],
+            'phone' => ['required', 'string', 'regex:/^[0-9]{7,15}$/', Rule::unique('customers', 'phone')->ignore($id)],
             'email' => ['nullable', 'email', Rule::unique('customers', 'email')->ignore($id)],
             'address' => ['nullable', 'string'],
             'id_card_number' => ['nullable', 'string', 'regex:/^\d{5}-\d{7}-\d{1}$/'],
@@ -79,6 +97,7 @@ class CustomerController extends Controller
 
     public function store(Request $request)
     {
+        $request->merge(['phone' => self::normalisePhone($request->input('phone'))]);
         $data = $request->validate($this->rules());
         $data['image'] = $this->handleImageUpload($request);
 
@@ -94,6 +113,7 @@ class CustomerController extends Controller
 
     public function update(Request $request, Customer $customer)
     {
+        $request->merge(['phone' => self::normalisePhone($request->input('phone'))]);
         $data = $request->validate($this->rules($customer->id));
         $data['image'] = $this->handleImageUpload($request, $customer);
 
@@ -102,26 +122,78 @@ class CustomerController extends Controller
         return redirect()->route('customers.index')->with('status', 'Customer updated.');
     }
 
+    /** Why a customer may NOT be deleted: deleting one instantly hides
+     *  their debt from the books (Capital Receivables sums credit_balance
+     *  over live rows only), while their orders stay behind. A customer
+     *  with any outstanding balance (owed either way — a negative balance
+     *  is an advance the business owes them) or any completed order must
+     *  be Disabled instead, which keeps the history intact. Returns null
+     *  when deletion is safe. */
+    private function deleteBlockedReason(Customer $customer): ?string
+    {
+        if (round((float) $customer->credit_balance, 2) != 0.0) {
+            return "an outstanding balance of Rs " . number_format((float) $customer->credit_balance, 2);
+        }
+        if ($customer->orders()->where('status', 'completed')->exists()) {
+            return "completed orders on record";
+        }
+        return null;
+    }
+
     public function destroy(Customer $customer)
     {
+        if ($reason = $this->deleteBlockedReason($customer)) {
+            return back()->withErrors(['error' => "Cannot delete {$customer->name}: they have {$reason}. Use Disable instead — it hides them from the picker while keeping their order/ledger history intact."]);
+        }
         $customer->delete();
         return back()->with('status', 'Customer moved to Trash.');
     }
 
-    /** Bulk-delete just the checked rows — moves each to Trash (soft delete). */
+    /** Bulk-delete just the checked rows — moves each to Trash (soft delete),
+     *  except blocked ones (see deleteBlockedReason()), which are reported
+     *  by name instead of being deleted. */
     public function destroySelected(Request $request)
     {
         $ids = (array) $request->input('ids', []);
-        $count = Customer::whereIn('id', $ids)->delete();
-        return back()->with('status', "{$count} customer(s) moved to Trash.");
+        $count = 0;
+        $blocked = [];
+        foreach (Customer::whereIn('id', $ids)->get() as $customer) {
+            if ($this->deleteBlockedReason($customer)) {
+                $blocked[] = $customer->name;
+                continue;
+            }
+            $customer->delete();
+            $count++;
+        }
+        $message = "{$count} customer(s) moved to Trash.";
+        if ($blocked) {
+            $message .= " " . count($blocked) . " blocked (outstanding balance or completed orders) — use Disable instead: " . implode(', ', array_slice($blocked, 0, 5)) . (count($blocked) > 5 ? ', and ' . (count($blocked) - 5) . ' more.' : '.');
+        }
+        return back()->with('status', $message);
     }
 
     /** Deletes every customer matching the CURRENT search/filter (not the
-     *  whole table) — same query index() uses to decide what's on screen. */
+     *  whole table) — same query index() uses to decide what's on screen,
+     *  except blocked ones (see deleteBlockedReason()), which are reported
+     *  instead of being deleted. */
     public function destroyAll(Request $request)
     {
-        $count = $this->filteredQuery($request)->delete();
-        return back()->with('status', "{$count} customer(s) moved to Trash.");
+        $ids = $this->filteredQuery($request)->pluck('id')->all();
+        $count = 0;
+        $blocked = 0;
+        foreach (Customer::whereIn('id', $ids)->get() as $customer) {
+            if ($this->deleteBlockedReason($customer)) {
+                $blocked++;
+                continue;
+            }
+            $customer->delete();
+            $count++;
+        }
+        $message = "{$count} customer(s) moved to Trash.";
+        if ($blocked) {
+            $message .= " {$blocked} blocked (outstanding balance or completed orders) — use Disable instead.";
+        }
+        return back()->with('status', $message);
     }
 
     /** Disable instead of delete — keeps their order/ledger history intact
@@ -243,18 +315,23 @@ class CustomerController extends Controller
             'note' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $customer->payments()->create([
-            'type' => $data['type'],
-            'amount' => $data['amount'],
-            'note' => $data['note'] ?? null,
-            'user_id' => auth()->id(),
-        ]);
+        // Ledger row + cached balance update must succeed or fail together
+        // (same pattern updatePayment()/destroyPayment() already use) —
+        // otherwise the history and the balance disagree permanently.
+        DB::transaction(function () use ($customer, $data) {
+            $customer->payments()->create([
+                'type' => $data['type'],
+                'amount' => $data['amount'],
+                'note' => $data['note'] ?? null,
+                'user_id' => auth()->id(),
+            ]);
 
-        if ($data['type'] === 'credit') {
-            $customer->decrement('credit_balance', $data['amount']);
-        } else {
-            $customer->increment('credit_balance', $data['amount']);
-        }
+            if ($data['type'] === 'credit') {
+                $customer->decrement('credit_balance', $data['amount']);
+            } else {
+                $customer->increment('credit_balance', $data['amount']);
+            }
+        });
 
         $label = $data['type'] === 'credit' ? 'Payment recorded' : 'Charge added';
         $customer->refresh();

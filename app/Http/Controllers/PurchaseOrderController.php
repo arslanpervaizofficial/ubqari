@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Product;
+use App\Models\ProductPriceHistory;
 use App\Models\PurchaseOrder;
 use App\Models\PurchaseOrderDraft;
 use App\Models\PurchaseOrderItem;
@@ -14,18 +15,15 @@ use Illuminate\Support\Facades\Schema;
 
 class PurchaseOrderController extends Controller
 {
-    /** Lists all POs. Received ones have their totals realigned to actual
-     *  received quantity on every load here too (not just on show()) —
-     *  so a PO received before this self-healing existed doesn't sit with
-     *  a stale total on this very page until someone happens to open it. */
+    /** Lists all POs. M6 — this is a GET and stays read-only: it used to
+     *  call recalculateTotals() (a write) on every received PO on every
+     *  load, churning updated_at and risking a lost-update race with a
+     *  concurrent edit. Totals are now recomputed only on write paths
+     *  (receive, updateItem, updateDiscount, destroyItem, supplier
+     *  returns, restore), so what this page shows is the stored total. */
     public function index()
     {
         $purchaseOrders = PurchaseOrder::with('supplier', 'items')->latest()->paginate(20);
-        foreach ($purchaseOrders as $po) {
-            if ($po->status === 'received') {
-                $this->recalculateTotals($po);
-            }
-        }
         return view('purchase_orders.index', compact('purchaseOrders'));
     }
 
@@ -280,6 +278,23 @@ class PurchaseOrderController extends Controller
         if (empty($filteredItems)) {
             return back()->withInput()->withErrors(['items' => 'Kam az kam aik product lazmi hai.']);
         }
+        // H12d — the same product twice on one PO (at possibly different
+        // costs) used to be accepted silently, and receive() then
+        // overwrote the product's cost reference per line, last line
+        // winning. Reject it with the product's name instead of merging
+        // silently, so the user picks one line per product.
+        $seenProductIds = [];
+        foreach ($filteredItems as $line) {
+            if (!empty($line['product_id'])) {
+                if (in_array($line['product_id'], $seenProductIds, false)) {
+                    $dupName = Product::find($line['product_id'])?->name ?? ('product #' . $line['product_id']);
+                    return back()->withInput()->withErrors([
+                        'items' => "\"{$dupName}\" is PO me do dafa hai. Aik product ki aik hi line rakhein — quantity ya cost aik line me jama kar dein.",
+                    ]);
+                }
+                $seenProductIds[] = $line['product_id'];
+            }
+        }
         $request->merge(['items' => $filteredItems]);
 
         $data = $request->validate([
@@ -325,20 +340,17 @@ class PurchaseOrderController extends Controller
 
                 $line['discount_percent'] = $line['discount_percent'] ?? 0;
 
-                // Max Discount % isn't a Purchase Order attribute at all —
-                // it's the product's own billing-discount ceiling, just
-                // shown and editable right here for convenience. Pull it
-                // out before creating the PO item (it's not a column on
-                // purchase_order_items) and push it onto the product
-                // instead, same as Rate/Discount already update on receive.
-                $maxDiscount = $line['max_discount_percent'] ?? null;
+                // H12e — Max Discount % isn't a Purchase Order attribute
+                // at all, it's the product's own billing-discount ceiling.
+                // It used to be pushed onto the product here, so a
+                // purchasing action silently changed a billing rule (the
+                // discount ceiling cashiers face) with no history or
+                // confirmation. That side-effect is removed: the value is
+                // simply dropped, and the ceiling is only ever changed on
+                // the product form itself.
                 unset($line['max_discount_percent']);
 
                 $po->items()->create($line);
-
-                if ($maxDiscount !== null) {
-                    Product::where('id', $line['product_id'])->update(['max_discount_percent' => $maxDiscount]);
-                }
 
                 $netCost = $line['cost_price'] * (1 - $line['discount_percent'] / 100);
                 $subtotal += $line['quantity'] * $netCost;
@@ -385,7 +397,21 @@ class PurchaseOrderController extends Controller
     }
 
     /** Marking a PO received auto-increases stock by the ACTUAL received quantity
-     *  (not necessarily what was ordered) and logs a purchase movement per line. */
+     *  (not necessarily what was ordered) and logs a purchase movement per line.
+     *
+     *  H12 — (a) every PO item key must be present in the payload: a line
+     *  omitted from the POST used to be silently received at its full
+     *  ordered quantity via the ?? fallback. (b) Receiving more than
+     *  ordered is rejected unless the explicit allow_over_receive flag
+     *  is set (the receive form has a checkbox for it), so a typo like
+     *  1000 instead of 100 cannot inflate stock 10x unnoticed.
+     *  (c) The PO row is locked inside the transaction BEFORE the status
+     *  check, so two concurrent submissions cannot both pass the
+     *  "not already received" check and both add stock.
+     *  M7 — a change to the product's purchase_price /
+     *  purchase_discount_percent here is recorded in
+     *  ProductPriceHistory. M8 — receiving past a product's max_stock
+     *  (when set) is rejected. */
     public function receive(Request $request, PurchaseOrder $purchaseOrder)
     {
         if ($purchaseOrder->status === 'received') {
@@ -395,53 +421,111 @@ class PurchaseOrderController extends Controller
         $data = $request->validate([
             'items' => ['required', 'array'],
             'items.*.received_quantity' => ['required', 'numeric', 'min:0'],
+            'allow_over_receive' => ['nullable', 'boolean'],
         ]);
 
-        DB::transaction(function () use ($purchaseOrder, $data) {
-            foreach ($purchaseOrder->items()->with('product')->get() as $item) {
-                $receivedQty = (float) ($data['items'][$item->id]['received_quantity'] ?? $item->quantity);
+        $poItems = $purchaseOrder->items()->with('product')->get();
 
-                $item->update(['received_quantity' => $receivedQty]);
+        // H12a — every line must be accounted for in the payload.
+        $missing = $poItems->filter(fn ($item) => !isset($data['items'][$item->id]['received_quantity']))
+            ->map(fn ($item) => $item->product?->name ?? ('item #' . $item->id))->values();
+        if ($missing->isNotEmpty()) {
+            return back()->withInput()->withErrors([
+                'items' => 'Received quantity missing for: ' . $missing->implode(', ') . '. Har line ki received quantity lazmi hai — koi line chhupi hui submit nahi ho sakti.',
+            ]);
+        }
 
-                if ($receivedQty > 0) {
-                    $item->product->increment('stock', $receivedQty);
-                    // Keep the product's Purchase Price / Purchase Discount %
-                    // in sync with this PO line's own GROSS cost and discount
-                    // — not the net figure. purchase_price must stay the raw
-                    // supplier rate everywhere (Products form, Excel import,
-                    // and here) so there's one consistent meaning for it;
-                    // anything that needs the actual cost after discount
-                    // should read Product::net_purchase_price instead.
-                    $item->product->update([
-                        'purchase_price' => $item->cost_price,
-                        'purchase_discount_percent' => $item->discount_percent,
-                    ]);
-
-                    StockMovement::create([
-                        'product_id' => $item->product_id,
-                        'type' => 'purchase',
-                        'quantity' => $receivedQty,
-                        'reason' => $receivedQty != $item->quantity
-                            ? "PO #{$purchaseOrder->id} received (ordered {$item->quantity}, received {$receivedQty})"
-                            : "PO #{$purchaseOrder->id} received",
-                        'user_id' => auth()->id(),
-                        'purchase_order_id' => $purchaseOrder->id,
+        // H12b — over-receipt needs the explicit override flag.
+        if (!$request->boolean('allow_over_receive')) {
+            foreach ($poItems as $item) {
+                $receivedQty = (float) $data['items'][$item->id]['received_quantity'];
+                if ($receivedQty > (float) $item->quantity) {
+                    return back()->withInput()->withErrors([
+                        'items' => "\"{$item->product->name}\" ki received quantity ({$receivedQty}) ordered quantity ({$item->quantity}) se zyada hai. "
+                            . 'Agar ye waqai over-shipment hai to "Over-shipment allow karein" tick karke dobara submit karein.',
                     ]);
                 }
             }
-            $purchaseOrder->update(['status' => 'received']);
+        }
 
-            // Realign subtotal/total with what was ACTUALLY received right
-            // away, rather than leaving the ordered-quantity figures stored
-            // at store() time sitting there until someone happens to open
-            // this PO's show page (the only other place this ran before).
-            // Left un-recalculated, any PO received with a short/over-ship
-            // silently kept a wrong `total`, which the Purchase Report reads
-            // straight off the row — throwing it out of sync with the
-            // Capital Report's Total Investment, which is computed live
-            // from received_quantity and was never wrong to begin with.
-            $this->recalculateTotals($purchaseOrder->fresh());
-        });
+        try {
+            DB::transaction(function () use ($purchaseOrder, $data) {
+                // H12c — lock first, then check status inside the lock.
+                $locked = PurchaseOrder::lockForUpdate()->findOrFail($purchaseOrder->id);
+                if ($locked->status === 'received') {
+                    throw new \RuntimeException('This PO was already received.');
+                }
+
+                // Projected stock per product, so the max_stock check
+                // stays correct even if one product appears on two lines.
+                $projectedStock = [];
+
+                foreach ($locked->items()->with('product')->get() as $item) {
+                    $receivedQty = (float) $data['items'][$item->id]['received_quantity'];
+
+                    // M8 — refuse receiving past max_stock when it is set.
+                    $projectedStock[$item->product_id] = ($projectedStock[$item->product_id] ?? (float) $item->product->stock) + $receivedQty;
+                    if ($item->product->max_stock !== null && $projectedStock[$item->product_id] > (float) $item->product->max_stock) {
+                        throw new \RuntimeException(
+                            "\"{$item->product->name}\" ki stock {$projectedStock[$item->product_id]} ho jaye gi, jo max stock ({$item->product->max_stock}) se zyada hai. "
+                            . 'Max stock barhayein ya received quantity kam karein.'
+                        );
+                    }
+
+                    $item->update(['received_quantity' => $receivedQty]);
+
+                    if ($receivedQty > 0) {
+                        $item->product->increment('stock', $receivedQty);
+                        // Keep the product's Purchase Price / Purchase Discount %
+                        // in sync with this PO line's own GROSS cost and discount
+                        // — not the net figure. purchase_price must stay the raw
+                        // supplier rate everywhere (Products form, Excel import,
+                        // and here) so there's one consistent meaning for it;
+                        // anything that needs the actual cost after discount
+                        // should read Product::net_purchase_price instead.
+                        // M7 — record the cost change in price history when
+                        // either cost field actually changes. The history
+                        // table has only old_price/new_price columns, so a
+                        // cost change is stored there as the purchase-price
+                        // movement (not a sale-price change).
+                        $oldCost = $item->product->purchase_price;
+                        $oldDiscount = $item->product->purchase_discount_percent;
+                        $item->product->update([
+                            'purchase_price' => $item->cost_price,
+                            'purchase_discount_percent' => $item->discount_percent,
+                        ]);
+                        if ((float) $oldCost !== (float) $item->cost_price || (float) $oldDiscount !== (float) $item->discount_percent) {
+                            ProductPriceHistory::create([
+                                'product_id' => $item->product_id,
+                                'old_price' => $oldCost,
+                                'new_price' => $item->cost_price,
+                                'changed_by' => auth()->id(),
+                            ]);
+                        }
+
+                        StockMovement::create([
+                            'product_id' => $item->product_id,
+                            'type' => 'purchase',
+                            'quantity' => $receivedQty,
+                            'reason' => $receivedQty != $item->quantity
+                                ? "PO #{$purchaseOrder->id} received (ordered {$item->quantity}, received {$receivedQty})"
+                                : "PO #{$purchaseOrder->id} received",
+                            'user_id' => auth()->id(),
+                            'purchase_order_id' => $purchaseOrder->id,
+                        ]);
+                    }
+                }
+                $locked->update(['status' => 'received']);
+
+                // Realign subtotal/total with what was ACTUALLY received
+                // right away, rather than leaving the ordered-quantity
+                // figures stored at store() time sitting there — the
+                // Purchase Report reads total straight off the row.
+                $this->recalculateTotals($locked->fresh());
+            });
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['error' => $e->getMessage()]);
+        }
 
         return redirect()->route('purchase-orders.index')->with('status', 'PO marked received — stock updated with actual received quantities.');
     }
@@ -459,13 +543,10 @@ class PurchaseOrderController extends Controller
     {
         abort_unless($purchaseOrder->status === 'received', 404);
         $purchaseOrder->load('items.product', 'supplier');
-        // Realigns subtotal/total with what was actually received — at
-        // store() time these were computed off the ORDERED quantities, so
-        // a PO with a short/over-shipment could otherwise show line totals
-        // here that don't sum to the PO's own stored subtotal until the
-        // first edit is made. Recalculating on every view keeps it
-        // consistent from the very first look, not just after a correction.
-        $this->recalculateTotals($purchaseOrder);
+        // M6 — no recalculateTotals() here any more: this is a GET and
+        // must not write. Totals are kept correct by the write paths
+        // (receive/updateItem/updateDiscount/destroyItem/supplier
+        // returns), so this page simply shows the stored figures.
         // FIX 4 — per-line delete permission for the show view. The
         // button is only enabled when this exact line may be deleted;
         // otherwise the reason is shown next to the disabled button.
@@ -492,6 +573,35 @@ class PurchaseOrderController extends Controller
             'received_quantity' => ['nullable', 'numeric', 'min:0'],
             'discount_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
         ]);
+
+        // H7 — two guards on a received-quantity correction, both
+        // returned as JSON 422 so the show page's patch() surfaces the
+        // message instead of silently applying a bad correction:
+        // (1) the new figure may never drop below the quantity already
+        // returned to the supplier for this line — those units are
+        // already out of stock, so a lower figure would double-subtract
+        // them; (2) a reduction may never take product stock below 0.
+        // NOTE on the H8 invariant: received_quantity is now the NET
+        // quantity still held (supplier returns reduce it at return
+        // time), so guard (1) is deliberately conservative — after a
+        // return of R units, the figure cannot be corrected below R even
+        // though the field now shows net held stock. The stock guard (2)
+        // alone would allow such a correction; if that behaviour is
+        // wanted, drop guard (1) and keep (2).
+        if (array_key_exists('received_quantity', $data) && $data['received_quantity'] !== null) {
+            $alreadyReturned = (float) $item->returns()->sum('quantity');
+            if ((float) $data['received_quantity'] < $alreadyReturned) {
+                return response()->json([
+                    'message' => "Received quantity {$alreadyReturned} se kam nahi ho sakti: is line ki {$alreadyReturned} unit supplier ko return ho chuki hai.",
+                ], 422);
+            }
+            $delta = (float) $data['received_quantity'] - (float) $item->received_quantity;
+            if ($delta < 0 && (float) $item->product->stock + $delta < 0) {
+                return response()->json([
+                    'message' => "Received quantity kam karne se \"{$item->product->name}\" ki stock negative ho jaye gi (maujud stock {$item->product->stock}, kami {$delta}).",
+                ], 422);
+            }
+        }
 
         DB::transaction(function () use ($item, $data) {
             if (array_key_exists('received_quantity', $data) && $data['received_quantity'] !== null) {

@@ -52,7 +52,7 @@ class UserController extends Controller
             'address' => ['nullable', 'string'],
             'id_card_number' => ['nullable', 'string', 'regex:/^\d{5}-\d{7}-\d{1}$/'],
             'image' => ['nullable', 'image', 'max:2048'],
-            'password' => ['required', 'string', 'min:6', 'confirmed'],
+            'password' => ['required', 'string', 'min:10', 'confirmed'],
             'role' => ['required', 'in:admin,manager,cashier'],
         ]);
 
@@ -70,6 +70,18 @@ class UserController extends Controller
         return view('users.edit', compact('user'));
     }
 
+    /** H25: count of active, non-trashed admins outside the given ids.
+     *  "Active" means role admin AND is_active, matching what can actually
+     *  administer the system. Soft-deleted users are excluded by default. */
+    private function activeAdminCountExcluding(array $ids = []): int
+    {
+        $query = User::where('role', 'admin')->where('is_active', true);
+        if ($ids) {
+            $query->whereNotIn('id', $ids);
+        }
+        return $query->count();
+    }
+
     public function update(Request $request, User $user)
     {
         $data = $request->validate([
@@ -82,8 +94,16 @@ class UserController extends Controller
             'id_card_number' => ['nullable', 'string', 'regex:/^\d{5}-\d{7}-\d{1}$/'],
             'image' => ['nullable', 'image', 'max:2048'],
             'role' => ['required', 'in:admin,manager,cashier'],
-            'password' => ['nullable', 'string', 'min:6', 'confirmed'],
+            'password' => ['nullable', 'string', 'min:10', 'confirmed'],
         ]);
+
+        // H25: never demote the last active admin — there would be no one
+        // left who can reach the admin-only routes, and recovery would need
+        // direct database access.
+        if ($user->role === 'admin' && $user->is_active && $data['role'] !== 'admin'
+            && $this->activeAdminCountExcluding([$user->id]) === 0) {
+            return back()->withErrors(['error' => 'You cannot demote the last active admin. Promote another admin first.']);
+        }
 
         $data['image'] = $this->handleImageUpload($request, $user);
 
@@ -104,6 +124,11 @@ class UserController extends Controller
         if ($user->id === auth()->id()) {
             return back()->withErrors(['error' => 'You cannot delete your own account.']);
         }
+        // H25: never delete the last active admin.
+        if ($user->role === 'admin' && $user->is_active
+            && $this->activeAdminCountExcluding([$user->id]) === 0) {
+            return back()->withErrors(['error' => 'You cannot delete the last active admin. Promote another admin first.']);
+        }
         $user->delete();
         return back()->with('status', 'User moved to Trash.');
     }
@@ -114,6 +139,12 @@ class UserController extends Controller
     public function destroySelected(Request $request)
     {
         $ids = array_diff((array) $request->input('ids', []), [auth()->id()]);
+        // H25: if the selection contains every active admin, refuse the
+        // whole batch instead of deleting some and stranding the system.
+        $adminsInSelection = User::whereIn('id', $ids)->where('role', 'admin')->where('is_active', true)->count();
+        if ($adminsInSelection > 0 && $this->activeAdminCountExcluding($ids) === 0) {
+            return back()->withErrors(['error' => 'You cannot delete the last active admin. Promote another admin first.']);
+        }
         $count = User::whereIn('id', $ids)->delete();
         return back()->with('status', "{$count} user(s) moved to Trash.");
     }
@@ -121,6 +152,14 @@ class UserController extends Controller
     /** Deletes every user currently listed except your own account. */
     public function destroyAll()
     {
+        // H25: same guard as destroySelected — deleting everyone except
+        // yourself must not remove the last other active admin when you
+        // are not an admin yourself.
+        $ids = User::where('id', '!=', auth()->id())->pluck('id')->all();
+        $adminsInSelection = User::whereIn('id', $ids)->where('role', 'admin')->where('is_active', true)->count();
+        if ($adminsInSelection > 0 && $this->activeAdminCountExcluding($ids) === 0) {
+            return back()->withErrors(['error' => 'You cannot delete the last active admin. Promote another admin first.']);
+        }
         $count = User::where('id', '!=', auth()->id())->delete();
         return back()->with('status', "{$count} user(s) moved to Trash.");
     }
@@ -131,6 +170,11 @@ class UserController extends Controller
     {
         if ($user->id === auth()->id()) {
             return back()->withErrors(['error' => 'You cannot disable your own account.']);
+        }
+        // H25: disabling (not enabling) the last active admin is refused.
+        if ($user->is_active && $user->role === 'admin'
+            && $this->activeAdminCountExcluding([$user->id]) === 0) {
+            return back()->withErrors(['error' => 'You cannot disable the last active admin. Promote another admin first.']);
         }
         $user->update(['is_active' => !$user->is_active]);
         $label = $user->is_active ? 'enabled' : 'disabled';

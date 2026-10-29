@@ -27,12 +27,14 @@
             <input type="date" name="expense_date" value="{{ now()->toDateString() }}" required class="border rounded px-3 py-2">
         </div>
         <div>
-            <label class="block text-sm text-gray-600 mb-1">Category (optional)</label>
-            <input name="category" placeholder="e.g. Rent, Utilities" class="border rounded px-3 py-2 w-40">
+            <label class="block text-sm text-gray-600 mb-1">Category</label>
+            <input name="category" placeholder="e.g. Rent, Utilities" required data-label="Category" class="border rounded px-3 py-2 w-40">
+            @error('category') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
         </div>
         <div class="flex-1 min-w-[200px]">
-            <label class="block text-sm text-gray-600 mb-1">Note (optional)</label>
-            <input name="note" placeholder="e.g. Shop electricity bill for September" class="border rounded px-3 py-2 w-full">
+            <label class="block text-sm text-gray-600 mb-1">Note</label>
+            <input name="note" placeholder="e.g. Shop electricity bill for September" required data-label="Note" class="border rounded px-3 py-2 w-full">
+            @error('note') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
         </div>
         <button class="btn btn-solid-green">Save</button>
     </form>

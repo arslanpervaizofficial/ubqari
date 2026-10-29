@@ -6,6 +6,8 @@ use App\Models\CashParty;
 use App\Models\CashTransaction;
 use App\Models\Expense;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 /** Deliberately standalone: nothing in here touches products, stock,
  *  orders, or any customer/supplier balance. It's a personal ledger for
@@ -56,30 +58,50 @@ class CashManagementController extends Controller
             return back()->withErrors(['party' => 'Pick an existing person or enter a name for a new one.'])->withInput();
         }
 
-        $party = !empty($data['party_id'])
-            ? CashParty::findOrFail($data['party_id'])
-            : CashParty::create(['name' => $data['party_name']]);
+        // Party create + borrow row + balance must succeed or fail
+        // together, and the balance is recomputed from the history
+        // (syncBalance) rather than trusted to a manual increment, so a
+        // half-applied write can never leave them disagreeing.
+        $party = DB::transaction(function () use ($data) {
+            $party = !empty($data['party_id'])
+                ? CashParty::findOrFail($data['party_id'])
+                : CashParty::create(['name' => $data['party_name']]);
 
-        $party->transactions()->create([
-            'type' => 'borrow',
-            'amount' => $data['amount'],
-            'transaction_date' => $data['transaction_date'],
-            'note' => $data['note'] ?? null,
-            'user_id' => auth()->id(),
-        ]);
-        $party->increment('balance', $data['amount']);
+            $party->transactions()->create([
+                'type' => 'borrow',
+                'amount' => $data['amount'],
+                'transaction_date' => $data['transaction_date'],
+                'note' => $data['note'] ?? null,
+                'user_id' => auth()->id(),
+            ]);
+            $party->syncBalance();
+            return $party;
+        });
 
         return back()->with('status', "Liability of {$data['amount']} added for {$party->name}.");
     }
 
+    /** Soft delete only (CashParty uses SoftDeletes). The old version
+     *  hard-deleted the party and the database cascade hard-deleted
+     *  every transaction with it — an irreversible loss of borrowing
+     *  history and an instant, silent drop in Capital Liabilities. A
+     *  soft delete leaves the transactions in place as history.
+     *  NOTE: Trash must list cash parties before a trashed party can be
+     *  restored from the UI (see CHANGES.txt); until then recovery is
+     *  via the database (restore the deleted_at value). */
     public function destroyParty(CashParty $cashParty)
     {
-        $cashParty->delete(); // cascades to its transactions (see migration)
-        return redirect()->route('cash-management.index')->with('status', "{$cashParty->name} and their transaction history removed.");
+        $cashParty->delete();
+        return redirect()->route('cash-management.index')->with('status', "{$cashParty->name} moved to Trash. Their transaction history is kept.");
     }
 
     public function show(CashParty $cashParty)
     {
+        // Repair any drift before showing: if the cached balance ever
+        // disagreed with the transaction history, this is the page that
+        // fixes it (same idea as the customer ledger's syncBalance()).
+        $cashParty->syncBalance();
+        $cashParty->refresh();
         $transactions = $cashParty->transactions()->with('user')->paginate(20);
         return view('cash_management.ledger', ['party' => $cashParty, 'transactions' => $transactions]);
     }
@@ -97,17 +119,20 @@ class CashManagementController extends Controller
             'note' => ['nullable', 'string', 'max:255'],
         ]);
 
-        if ($data['type'] === 'repay' && $data['amount'] > $cashParty->balance) {
-            return back()->withErrors(['amount' => "Amount ({$data['amount']}) is more than what's currently owed to {$cashParty->name} ({$cashParty->balance})."]);
-        }
-
-        $cashParty->transactions()->create($data + ['user_id' => auth()->id()]);
-
-        if ($data['type'] === 'borrow') {
-            $cashParty->increment('balance', $data['amount']);
-        } else {
-            $cashParty->decrement('balance', $data['amount']);
-        }
+        // Transaction row + balance recompute inside one transaction,
+        // with the repay cap re-checked against a row-locked fresh
+        // balance — the old code checked the (possibly stale) bound
+        // balance and then updated it in two separate queries, so two
+        // cashiers acting at once could over-repay or leave the balance
+        // disagreeing with the history.
+        DB::transaction(function () use ($cashParty, $data) {
+            $party = CashParty::whereKey($cashParty->id)->lockForUpdate()->firstOrFail();
+            if ($data['type'] === 'repay' && $data['amount'] > (float) $party->balance) {
+                throw ValidationException::withMessages(['amount' => "Amount ({$data['amount']}) is more than what's currently owed to {$party->name} ({$party->balance})."]);
+            }
+            $party->transactions()->create($data + ['user_id' => auth()->id()]);
+            $party->syncBalance();
+        });
 
         $label = $data['type'] === 'borrow' ? 'Borrowed amount' : 'Repayment';
         return back()->with('status', "{$label} of {$data['amount']} recorded for {$cashParty->name}.");
@@ -117,16 +142,21 @@ class CashManagementController extends Controller
     {
         abort_unless($transaction->cash_party_id === $cashParty->id, 404);
 
-        // Reverse its effect on the running balance before removing it —
-        // otherwise the cached balance would silently drift from the sum
-        // of what's actually in the history.
-        if ($transaction->type === 'borrow') {
-            $cashParty->decrement('balance', $transaction->amount);
-        } else {
-            $cashParty->increment('balance', $transaction->amount);
+        // Removing a borrow lowers the balance; if that would take it
+        // below zero (e.g. the borrow was already repaid), refuse rather
+        // than recording a negative amount owed. Removing a repay only
+        // ever raises the balance, so it needs no such guard.
+        if ($transaction->type === 'borrow' && (float) $transaction->amount > (float) $cashParty->balance) {
+            return back()->withErrors(['amount' => "Removing this borrow of {$transaction->amount} would take {$cashParty->name}'s balance below zero (currently owed: {$cashParty->balance}). Record the position correctly first — e.g. the repayments against it — then remove it."]);
         }
 
-        $transaction->delete();
+        // Delete (now a soft delete via the model's SoftDeletes trait) +
+        // recompute the balance from the remaining live transactions, so
+        // the cached balance can never drift from the history.
+        DB::transaction(function () use ($cashParty, $transaction) {
+            $transaction->delete();
+            $cashParty->syncBalance();
+        });
         return back()->with('status', 'Transaction removed and balance adjusted.');
     }
 }

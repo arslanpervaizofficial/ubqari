@@ -20,26 +20,46 @@ class CustomerPayment extends Model
      *  reversing it decreases it. Used both when editing an entry (reverse
      *  the old amount, then the new amount is re-applied) and when
      *  deleting one (moving it to Trash). Caller wraps this with the
-     *  actual update/delete in a DB transaction. */
+     *  actual update/delete in a DB transaction.
+     *
+     *  Guard: a soft-deleted (trashed) parent customer resolves to null
+     *  through this belongsTo (no withTrashed()), e.g. when a payment is
+     *  restored while its customer is still in Trash. Dereferencing null
+     *  used to fatal-error the whole restore; the effect is now skipped
+     *  instead. That keeps the restore from crashing, but it means the
+     *  balance effect is lost for that entry — Trash restore should
+     *  restore the customer first (see CHANGES.txt), and the ledger page's
+     *  syncBalance() is what eventually repairs the stored balance. */
     public function reverseEffect(): void
     {
+        $customer = $this->customer;
+        if (!$customer) {
+            return;
+        }
         if ($this->type === 'credit') {
-            $this->customer->increment('credit_balance', $this->amount);
+            $customer->increment('credit_balance', $this->amount);
         } else {
-            $this->customer->decrement('credit_balance', $this->amount);
+            $customer->decrement('credit_balance', $this->amount);
         }
     }
 
     /** The exact inverse of reverseEffect() — used when a Credit/Debit
      *  entry is Restored from Trash, to re-apply the balance effect that
      *  was reversed when it was deleted. Must run BEFORE $payment->restore(),
-     *  same ordering reason as Order::restoreCompletedEffects(). */
+     *  same ordering reason as Order::restoreCompletedEffects(). Same
+     *  null-customer guard as reverseEffect(): a payment restored while
+     *  its customer is still trashed skips its balance effect rather
+     *  than crashing. */
     public function restoreEffect(): void
     {
+        $customer = $this->customer;
+        if (!$customer) {
+            return;
+        }
         if ($this->type === 'credit') {
-            $this->customer->decrement('credit_balance', $this->amount);
+            $customer->decrement('credit_balance', $this->amount);
         } else {
-            $this->customer->increment('credit_balance', $this->amount);
+            $customer->increment('credit_balance', $this->amount);
         }
     }
 }

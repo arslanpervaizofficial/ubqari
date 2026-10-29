@@ -10,9 +10,52 @@ use App\Models\StockMovement;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class POSController extends Controller
 {
+    /** Admins and managers may act on another cashier's order; cashiers may
+     *  only act on their own. Used by the ownership guards below (C3/C4). */
+    private function isPrivileged(): bool
+    {
+        $user = auth()->user();
+        return $user && ($user->isAdmin() || $user->isManager());
+    }
+
+    /** Ownership guard for POS order actions (C4): abort 403 unless the
+     *  order belongs to the caller or the caller is admin/manager. When
+     *  $requireSession is true, a non-privileged caller must also have
+     *  this order as their active cart in the session. */
+    private function assertPosOrderAccess(Order $order, Request $request, bool $requireSession = false): void
+    {
+        if (!$this->isPrivileged() && (int) $order->user_id !== (int) auth()->id()) {
+            abort(403, 'You can only work on your own orders.');
+        }
+        if ($requireSession && !$this->isPrivileged()
+            && (int) $request->session()->get('current_order_id') !== (int) $order->id) {
+            abort(403, 'This order is not your active cart.');
+        }
+    }
+
+    /** Guard for the cart-item JSON endpoints (C3): the parent order must
+     *  be the caller's active in_progress cart (admin/manager excepted).
+     *  Returns null on success, or a JSON error response to return. */
+    private function cartItemGuard(OrderItem $item, Request $request)
+    {
+        $order = $item->order;
+        if (!$order) {
+            return response()->json(['error' => 'Order not found.'], 404);
+        }
+        if ($order->status !== 'in_progress') {
+            return response()->json(['error' => 'Only the active cart can be edited. Completed orders must go through "Load Order" / Edit first.'], 403);
+        }
+        if (!$this->isPrivileged()
+            && (int) $request->session()->get('current_order_id') !== (int) $order->id) {
+            return response()->json(['error' => 'This cart belongs to another session.'], 403);
+        }
+        return null;
+    }
+
     public function index(Request $request)
     {
         $order = $this->getOrCreateCurrentOrder($request);
@@ -39,8 +82,15 @@ class POSController extends Controller
     {
         $data = $request->validate(['order_number' => ['required', 'string']]);
 
-        $order = Order::where('order_number', trim($data['order_number']))
-            ->orWhere('id', is_numeric($data['order_number']) ? (int) $data['order_number'] : 0)
+        // FIXED (H1): the old ungrouped orWhere produced
+        // "order_number = ? OR (id = ? AND status = completed)" — the status
+        // filter did not apply to the order-number branch, so a hold or
+        // in_progress order could be loaded by its number. Grouping the
+        // OR inside a closure applies status=completed to BOTH branches.
+        $order = Order::where(function ($q) use ($data) {
+                $q->where('order_number', trim($data['order_number']))
+                    ->orWhere('id', is_numeric($data['order_number']) ? (int) $data['order_number'] : 0);
+            })
             ->where('status', 'completed')
             ->first();
 
@@ -137,11 +187,15 @@ class POSController extends Controller
         return view('pos.held_index', compact('heldOrders'));
     }
 
-    public function showHeld(Order $order)
+    public function showHeld(Request $request, Order $order)
     {
         if ($order->status !== 'hold') {
             abort(404);
         }
+        // FIXED (C4): list filtering alone is not access control — a
+        // cashier could previously open/resume any other cashier's held
+        // order by guessing its sequential id.
+        $this->assertPosOrderAccess($order, $request);
         $order->load('items.product', 'customer');
         return view('pos.held_detail', compact('order'));
     }
@@ -151,6 +205,7 @@ class POSController extends Controller
         if ($order->status !== 'hold') {
             return back()->withErrors(['error' => 'Only held orders can be resumed.']);
         }
+        $this->assertPosOrderAccess($order, $request);
 
         $currentId = $request->session()->get('current_order_id');
         if ($currentId && $currentId != $order->id) {
@@ -180,6 +235,13 @@ class POSController extends Controller
 
         $order = $this->getOrCreateCurrentOrder($request);
         $product = Product::findOrFail($data['product_id']);
+
+        // FIXED (M4): the search UI hides inactive products, but addItem
+        // previously accepted any existing product id by direct POST, so a
+        // deactivated product could still be sold.
+        if (!$product->is_active) {
+            return response()->json(['error' => "{$product->name} is inactive and cannot be sold."], 422);
+        }
 
         // Round quantity according to unit type: whole numbers for piece/box/etc,
         // 2-decimal precision for kg/ml/etc.
@@ -239,6 +301,9 @@ class POSController extends Controller
 
     public function removeItem(Request $request, OrderItem $item)
     {
+        if ($guard = $this->cartItemGuard($item, $request)) {
+            return $guard;
+        }
         $order = $item->order;
         $item->delete();
         $this->recalculateTotals($order);
@@ -248,6 +313,9 @@ class POSController extends Controller
 
     public function updateItemQuantity(Request $request, OrderItem $item)
     {
+        if ($guard = $this->cartItemGuard($item, $request)) {
+            return $guard;
+        }
         $data = $request->validate(['quantity' => ['required', 'numeric', 'min:0.01']]);
         $product = $item->product;
 
@@ -289,12 +357,22 @@ class POSController extends Controller
         ]);
     }
 
-    /** Per-item discount. Applying above the product's max_discount_percent is
-     *  ALLOWED (cashier can still do it) but flagged back to the UI as a warning
-     *  so it stays visible as a tip, not a blocker. */
+    /** Per-item discount. FIXED (M5): above the product's max_discount_percent
+     *  used to be ALLOWED for everyone with only a warning ("Applied anyway"),
+     *  so the max was advisory, not a control. Now a cashier is REJECTED
+     *  (422, nothing saved); only admin/manager may override, and the
+     *  warning is still returned for them so the override stays visible. */
     public function updateItemDiscount(Request $request, OrderItem $item)
     {
+        if ($guard = $this->cartItemGuard($item, $request)) {
+            return $guard;
+        }
         $data = $request->validate(['discount_percent' => ['required', 'numeric', 'min:0', 'max:100']]);
+
+        $maxDiscount = $item->product ? (float) $item->product->max_discount_percent : 0;
+        if ($maxDiscount > 0 && $data['discount_percent'] > $maxDiscount && auth()->user()->isCashier()) {
+            return response()->json(['error' => "Discount {$data['discount_percent']}% exceeds the max allowed for {$item->product->name} ({$maxDiscount}%). Ask a manager to approve it."], 422);
+        }
 
         $item->discount_percent = $data['discount_percent'];
         $this->recalculateLineTotal($item);
@@ -314,11 +392,21 @@ class POSController extends Controller
         ]);
     }
 
-    /** Overall order-level discount, editable independently of the customer's default. */
+    /** Overall order-level discount, editable independently of the customer's default.
+     *  FIXED (M5): previously any cashier could set it to 100% with no cap
+     *  at all. Now a cashier is capped at the current customer's standing
+     *  default discount (0% for walk-in); admin/manager are unrestricted. */
     public function setOverallDiscount(Request $request)
     {
         $order = $this->getOrCreateCurrentOrder($request);
         $data = $request->validate(['discount_percent' => ['required', 'numeric', 'min:0', 'max:100']]);
+
+        if (auth()->user()->isCashier()) {
+            $cap = $order->customer_id ? (float) (Customer::find($order->customer_id)->discount_percent ?? 0) : 0;
+            if ($data['discount_percent'] > $cap) {
+                return response()->json(['error' => "Cashiers can only set an overall discount up to the customer's default ({$cap}%). Ask a manager for more."], 422);
+            }
+        }
 
         $order->discount_percent = $data['discount_percent'];
         $order->save();
@@ -332,12 +420,32 @@ class POSController extends Controller
         $order = $this->getOrCreateCurrentOrder($request);
         $data = $request->validate(['customer_id' => ['nullable', 'exists:customers,id']]);
 
+        // FIXED (M2): the customer's default discount used to OVERWRITE
+        // whatever overall discount was already on the order, every time
+        // the party was selected or re-selected — a cashier-entered 10%
+        // silently became the customer's 5% (or 0%). Now the default is
+        // applied only when no discount is set yet, or when the current
+        // value is just the previous customer's default (i.e. not a
+        // cashier-entered value). A cashier-entered discount is never
+        // overwritten; switching to walk-in only drops a previous
+        // customer's default, never a cashier-entered value. (Discounts
+        // are stored as a single number, so "cashier-entered" is inferred
+        // as "differs from the previous customer's default" — that is the
+        // only distinction available without a new column.)
+        $oldCustomerId = $order->customer_id;
+        $oldDefault = $oldCustomerId ? (float) (Customer::find($oldCustomerId)->discount_percent ?? 0) : null;
+        $currentDiscount = (float) $order->discount_percent;
         $order->customer_id = $data['customer_id'] ?? null;
-        // Suggest the customer's default discount as the overall discount —
-        // cashier can still edit it afterwards via setOverallDiscount.
-        $order->discount_percent = $order->customer_id
-            ? (Customer::find($order->customer_id)->discount_percent ?? 0)
-            : 0;
+        if ($order->customer_id) {
+            $newDefault = (float) (Customer::find($order->customer_id)->discount_percent ?? 0);
+            if ($currentDiscount == 0 || ($oldDefault !== null && $currentDiscount == $oldDefault)) {
+                $order->discount_percent = $newDefault;
+            }
+        } else {
+            if ($oldDefault !== null && $currentDiscount == $oldDefault) {
+                $order->discount_percent = 0;
+            }
+        }
         $order->save();
         $this->recalculateTotals($order);
 
@@ -370,17 +478,41 @@ class POSController extends Controller
         $overallDiscountAmount = round($afterLineDiscounts * ($order->discount_percent / 100), 2);
         $total = $afterLineDiscounts - $overallDiscountAmount;
 
+        // FIXED (M1): due_amount used to be clamped with max(0, ...) for
+        // everyone, which silently erased a named customer's signed
+        // advance (overpayment) the first time any line was edited after
+        // loading a completed order for edit. For named customers the due
+        // stays SIGNED (total - paid; negative = advance), exactly as
+        // complete() already computes it. Walk-in has no account to hold
+        // an advance on, so it still clamps at 0 (the excess is change).
         $order->update([
             'subtotal' => $grossSubtotal,
             'line_discount_total' => $lineDiscountTotal,
             'discount_amount' => $overallDiscountAmount,
             'total' => $total,
-            'due_amount' => max(0, $total - $order->paid_amount),
+            'due_amount' => $order->customer_id
+                ? round($total - $order->paid_amount, 2)
+                : max(0, $total - $order->paid_amount),
         ]);
     }
 
     public function complete(Request $request, Order $order)
     {
+        // FIXED (C4): only the order's owner, or admin/manager, may
+        // complete it — and a non-privileged caller must have it as their
+        // active session cart, so completing it cannot strand the original
+        // cashier's session on a now-completed order.
+        $this->assertPosOrderAccess($order, $request, true);
+
+        // FIXED (C1): previously the ONLY guard here was the empty-cart
+        // check — a completed order could be completed again (double-click,
+        // re-POST, back-button resubmit), decrementing stock, creating a
+        // second set of sale movements and incrementing customer credit a
+        // second time. Now only in_progress or hold orders complete.
+        if (!in_array($order->status, ['in_progress', 'hold'])) {
+            return back()->withErrors(['error' => 'Only an active or held order can be completed. This order is already completed.']);
+        }
+
         $data = $request->validate([
             'payment_method' => ['required', 'in:cash,bank,split'],
             'cash_amount' => ['nullable', 'numeric', 'min:0'],
@@ -394,33 +526,98 @@ class POSController extends Controller
             return back()->withErrors(['error' => 'Cannot complete an empty order.']);
         }
 
-        DB::transaction(function () use ($order, $data) {
-            foreach ($order->items()->with('product')->get() as $item) {
-                $item->product->decrement('stock', $item->quantity);
+        // FIXED (H4, second half): if ledger payments (OrderPayment rows)
+        // already exist for this order, the checkout form's paid amount
+        // must NOT overwrite the order's paid/due — those figures already
+        // reflect recorded payments (and, after an edit, the recalculated
+        // total). They are preserved below, along with the original
+        // payment method/details, instead of being replaced by the
+        // checkout input.
+        $hasPayments = $order->payments()->exists();
+
+        DB::transaction(function () use ($order, $data, $hasPayments) {
+            // Lock the order row first and re-check status inside the
+            // transaction (C1): without this, two concurrent completes
+            // could both pass the pre-transaction status check.
+            $locked = Order::where('id', $order->id)->lockForUpdate()->firstOrFail();
+            if (!in_array($locked->status, ['in_progress', 'hold'])) {
+                throw ValidationException::withMessages(['error' => 'This order has already been completed.']);
+            }
+
+            $items = $locked->items()->with('product')->get();
+
+            // FIXED (H2): lock every product row and verify stock BEFORE
+            // decrementing anything. Previously complete() never re-checked
+            // availability, so two cashiers selling the last units, or a
+            // stock change between add and complete, drove stock negative.
+            // Throwing aborts the whole transaction — no partial sale.
+            $products = [];
+            foreach ($items as $item) {
+                $product = Product::where('id', $item->product_id)->lockForUpdate()->firstOrFail();
+                if ((float) $product->stock < (float) $item->quantity) {
+                    throw ValidationException::withMessages(['error' => "Not enough stock for {$product->name}: {$product->stock} available, {$item->quantity} needed."]);
+                }
+                $products[$item->product_id] = $product;
+            }
+
+            foreach ($items as $item) {
+                $products[$item->product_id]->decrement('stock', $item->quantity);
                 StockMovement::create([
                     'product_id' => $item->product_id,
                     'type' => 'sale',
                     'quantity' => -$item->quantity,
                     'user_id' => auth()->id(),
-                    'order_id' => $order->id,
+                    'order_id' => $locked->id,
                 ]);
             }
 
-            $paid = $data['payment_method'] === 'split'
-                ? (float) ($data['cash_amount'] ?? 0) + (float) ($data['bank_amount'] ?? 0)
-                : (float) ($data['paid_amount'] ?? $order->total);
+            if ($hasPayments) {
+                $paid = $locked->paid_amount;
+                $due = $locked->due_amount;
+                $paymentMethod = $locked->payment_method;
+                $bankName = $locked->bank_name;
+                $transactionId = $locked->transaction_id;
+                $cashAmount = $locked->cash_amount;
+                $bankAmount = $locked->bank_amount;
+            } else {
+                $paid = $data['payment_method'] === 'split'
+                    ? (float) ($data['cash_amount'] ?? 0) + (float) ($data['bank_amount'] ?? 0)
+                    : (float) ($data['paid_amount'] ?? $locked->total);
 
-            // Named customer: due is SIGNED — if they hand over more than the
-            // bill (e.g. 25,000 against 24,476), the extra (-524) is kept as
-            // a negative due/advance on their account instead of being
-            // silently thrown away by max(0, ...). Walk-in (no customer)
-            // has no account to hold an advance on, so the extra is just
-            // change handed back and due stays at 0.
-            $due = $order->customer_id
-                ? round($order->total - $paid, 2)
-                : max(0, round($order->total - $paid, 2));
+                // Named customer: due is SIGNED — if they hand over more than the
+                // bill (e.g. 25,000 against 24,476), the extra (-524) is kept as
+                // a negative due/advance on their account instead of being
+                // silently thrown away by max(0, ...). Walk-in (no customer)
+                // has no account to hold an advance on, so the extra is just
+                // change handed back and due stays at 0.
+                $due = $locked->customer_id
+                    ? round($locked->total - $paid, 2)
+                    : max(0, round($locked->total - $paid, 2));
 
-            $order->update([
+                $paymentMethod = $data['payment_method'];
+                $bankName = $data['bank_name'] ?? null;
+                $transactionId = $data['transaction_id'] ?? null;
+
+                // FIXED (H23-part): the split breakdown used to be computed
+                // and then thrown away — cash_amount/bank_amount were never
+                // persisted, so Cash Reconciliation could never count the
+                // cash half of a split sale. Now it is stored on the order
+                // (columns created by the migration package): split stores
+                // both parts; cash stores cash_amount=paid, bank null; bank
+                // stores bank_amount=paid, cash null.
+                if ($data['payment_method'] === 'split') {
+                    $cashAmount = (float) ($data['cash_amount'] ?? 0);
+                    $bankAmount = (float) ($data['bank_amount'] ?? 0);
+                } elseif ($data['payment_method'] === 'cash') {
+                    $cashAmount = $paid;
+                    $bankAmount = null;
+                } else {
+                    $cashAmount = null;
+                    $bankAmount = $paid;
+                }
+            }
+
+            $locked->update([
                 'status' => 'completed',
                 // A held/draft order that gets completed and paid for is a
                 // real sale now, not a quotation/estimate anymore — reset
@@ -431,29 +628,43 @@ class POSController extends Controller
                 // was never cleared again once that order was resumed and
                 // actually completed).
                 'is_quotation' => false,
-                'payment_method' => $data['payment_method'],
-                'bank_name' => $data['bank_name'] ?? null,
-                'transaction_id' => $data['transaction_id'] ?? null,
+                'payment_method' => $paymentMethod,
+                'bank_name' => $bankName,
+                'transaction_id' => $transactionId,
                 'paid_amount' => $paid,
                 'due_amount' => $due,
+                'cash_amount' => $cashAmount,
+                'bank_amount' => $bankAmount,
                 // Set once, on the very first completion, and never touched
                 // again — even when this same order is later reopened and
                 // re-completed through the "load order to edit" flow.
-                'original_completed_at' => $order->original_completed_at ?? now(),
+                'original_completed_at' => $locked->original_completed_at ?? now(),
             ]);
 
-            if ($order->customer_id && abs($due) > 0.004) {
-                $order->customer()->increment('credit_balance', $due);
+            if ($locked->customer_id && abs($due) > 0.004) {
+                $locked->customer()->increment('credit_balance', $due);
             }
         });
 
-        request()->session()->forget('current_order_id');
+        if ($request->session()->get('current_order_id') == $order->id) {
+            $request->session()->forget('current_order_id');
+        }
 
         return redirect()->route('pos.invoice', $order)->with('status', 'Order completed.');
     }
 
     public function saveAsQuotation(Request $request, Order $order)
     {
+        // FIXED (C2): previously ANY order — including a completed sale —
+        // could be flipped to a held "quotation" with no stock/ledger
+        // reversal, so the sale vanished from reports while stock and
+        // customer credit still reflected it (and it could then be
+        // resumed and completed a second time). Now only in_progress or
+        // hold orders can become a quotation.
+        if (!in_array($order->status, ['in_progress', 'hold'])) {
+            return back()->withErrors(['error' => 'Only an active or held order can be saved as a quotation. A completed order must be edited through "Load Order" / Edit instead.']);
+        }
+        $this->assertPosOrderAccess($order, $request);
         $order->update(['is_quotation' => true, 'status' => 'hold']);
         request()->session()->forget('current_order_id');
 
@@ -474,6 +685,18 @@ class POSController extends Controller
      *  never actually happened. */
     public function cancel(Request $request, Order $order)
     {
+        // FIXED (C2): previously ANY order — including a completed sale —
+        // was bare soft-deleted here with no reverseCompletedEffects(), so
+        // the sale vanished while stock stayed deducted and customer
+        // credit stayed raised (and a later Trash restore re-applied the
+        // sale a second time). Cancel is only for held orders, which were
+        // never completed and have nothing to reverse. A completed order
+        // must be deleted from the Orders list (OrderController::destroy),
+        // which reverses stock and balance first.
+        if ($order->status !== 'hold') {
+            return back()->withErrors(['error' => 'Only a held order can be moved to Trash from here. To delete a completed order, use Delete on the Orders list — that reverses stock and customer balance first.']);
+        }
+        $this->assertPosOrderAccess($order, $request);
         $order->delete();
         if ($request->session()->get('current_order_id') == $order->id) {
             $request->session()->forget('current_order_id');
@@ -481,17 +704,53 @@ class POSController extends Controller
         return redirect()->route('pos.held-index')->with('status', 'Held order moved to Trash.');
     }
 
-    public function invoice(Order $order)
+    public function invoice(Request $request, Order $order)
     {
+        // FIXED (C4): any cashier could previously view any order's
+        // invoice (including customer details) by id.
+        $this->assertPosOrderAccess($order, $request);
         $order->load('items.product', 'customer', 'cashier');
         return view('pos.invoice', compact('order'));
     }
 
     public function reorder(Request $request, Order $order)
     {
-        $newOrder = $this->getOrCreateCurrentOrder($request);
+        // FIXED (M4): validate every source product BEFORE touching the
+        // current cart — an inactive product aborts the whole reorder
+        // (422-style error on this redirect flow) instead of partially
+        // building a cart. Missing products (force-deleted) are skipped
+        // below, since there is nothing to sell.
         foreach ($order->items as $sourceItem) {
             $product = $sourceItem->product;
+            if ($product && !$product->is_active) {
+                return back()->withErrors(['error' => "Cannot re-order: {$product->name} is inactive."]);
+            }
+        }
+
+        // FIXED (M3): reorder used to APPEND the old order's items to
+        // whatever open cart the cashier already had (possibly another
+        // customer's, with that cart's overall discount still applied) —
+        // "duplicate this order" silently became "merge two customers'
+        // carts". Now it always starts from a FRESH cart: the current
+        // cart, if it has items, is held first (same rule as + New
+        // Order); an empty one is discarded, never sent to Trash (v1.4).
+        $currentId = $request->session()->get('current_order_id');
+        if ($currentId) {
+            $current = Order::where('id', $currentId)->where('status', 'in_progress')->first();
+            if ($current) {
+                if ($current->items()->count() > 0) {
+                    $current->update(['status' => 'hold']);
+                } else {
+                    $current->forceDelete();
+                }
+            }
+        }
+        $request->session()->forget('current_order_id');
+        $newOrder = $this->getOrCreateCurrentOrder($request);
+
+        foreach ($order->items as $sourceItem) {
+            $product = $sourceItem->product;
+            if (!$product) continue;
             $available = $this->availableStock($product);
             $qty = min($sourceItem->quantity, $available);
             if ($qty <= 0) continue;
@@ -506,6 +765,11 @@ class POSController extends Controller
             $newOrder->items()->save($item);
         }
         $newOrder->customer_id = $order->customer_id;
+        // The reordered cart is priced with THAT customer's default
+        // overall discount, not whatever the previous open cart had.
+        $newOrder->discount_percent = $order->customer_id
+            ? (Customer::find($order->customer_id)->discount_percent ?? 0)
+            : 0;
         $newOrder->save();
         $this->recalculateTotals($newOrder);
 

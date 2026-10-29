@@ -63,7 +63,7 @@
 // Same product-search pattern as the Purchase Order form: a local list for
 // instant filtering while typing, backed by the AJAX search endpoint once
 // the user has typed 2+ characters.
-const PRODUCTS = {!! json_encode($productsForJs) !!};
+const PRODUCTS = @json($productsForJs);
 const SEARCH_URL = "{{ route('products.ajax-search') }}";
 const LOOKUP_ORDER_URL = "{{ route('stock-returns.lookup-order') }}";
 let lineCount = 0;

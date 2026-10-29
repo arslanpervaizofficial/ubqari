@@ -5,7 +5,7 @@
     <h1 class="text-2xl font-bold">PO #{{ $purchaseOrder->id }}</h1>
     <a href="{{ route('purchase-orders.index') }}" class="btn btn-gray"><svg class="w-4 h-4 inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg> Back</a>
 </div>
-<p class="text-sm text-gray-500 mb-4">Supplier: {{ $purchaseOrder->supplier->name }} — Received</p>
+<p class="text-sm text-gray-500 mb-4">Supplier: {{ $purchaseOrder->supplier->name ?? '— (deleted supplier)' }} — Received</p>
 
 <div class="mb-4 bg-blue-50 text-blue-800 text-sm px-4 py-2 rounded-lg">
     Click <strong>Received Qty</strong> or <strong>Discount %</strong> to correct a mistake — it saves automatically when you click away or press Enter. Stock and totals update live. Product and Cost Price aren't editable here; those aren't corrections, they'd be a different purchase.

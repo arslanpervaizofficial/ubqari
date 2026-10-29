@@ -2,7 +2,7 @@
 @section('title', 'Receive Purchase Order')
 @section('content')
 <h1 class="text-2xl font-bold mb-1">Receive PO #{{ $purchaseOrder->id }}</h1>
-<p class="text-sm text-gray-500 mb-4">Supplier: {{ $purchaseOrder->supplier->name }}</p>
+<p class="text-sm text-gray-500 mb-4">Supplier: {{ $purchaseOrder->supplier->name ?? '— (deleted supplier)' }}</p>
 
 <div class="mb-4 bg-blue-50 text-blue-800 text-sm px-4 py-2 rounded-lg">
     Ordered quantity is pre-filled below — edit it if the supplier actually delivered more or less, then confirm. Stock is updated using what you enter here, not the original order quantity.
@@ -39,6 +39,12 @@
         </tbody>
     </table>
     </div>
+
+    {{-- H12b: receiving more than ordered is rejected unless this is ticked. --}}
+    <label class="flex items-center gap-2 text-sm text-gray-600 mb-4">
+        <input type="checkbox" name="allow_over_receive" value="1">
+        Over-shipment allow karein (kisi line ki received quantity ordered se zyada ho to bhi accept karein)
+    </label>
 
     <div class="flex justify-end gap-2">
         <a href="{{ route('purchase-orders.index') }}" class="btn btn-gray">Cancel</a>

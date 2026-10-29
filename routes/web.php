@@ -22,7 +22,9 @@ use Illuminate\Support\Facades\Route;
 // ---------- Guest ----------
 Route::middleware('guest')->group(function () {
     Route::get('/login', [LoginController::class, 'showLoginForm'])->name('login');
-    Route::post('/login', [LoginController::class, 'login']);
+    // H26: throttle login attempts — 5 tries per minute per IP. This is the
+    // only throttling layer for login (no RateLimiter in LoginController).
+    Route::post('/login', [LoginController::class, 'login'])->middleware('throttle:5,1');
 });
 
 Route::get('/', fn () => redirect()->route('pos.index'));
@@ -30,7 +32,9 @@ Route::get('/', fn () => redirect()->route('pos.index'));
 // ---------- Authenticated ----------
 Route::middleware('auth')->group(function () {
     Route::post('/logout', [LoginController::class, 'logout'])->name('logout');
-    Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
+    // H28: the dashboard shows whole-business sales, so it is no longer
+    // auth-only — hiding the sidebar link was never access control.
+    Route::middleware('role:admin,manager')->get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
     Route::get('/pos-product-search', [POSController::class, 'productSearch'])->name('pos.product-search');
 
     // Self-service settings (any logged-in user) — name/password only, email locked.
@@ -94,6 +98,7 @@ Route::middleware('auth')->group(function () {
         Route::post('customers/{customer}/toggle-active', [CustomerController::class, 'toggleActive'])->name('customers.toggle-active');
 
         Route::resource('suppliers', SupplierController::class)->except(['show', 'destroy']);
+        Route::get('suppliers/{supplier}', [SupplierController::class, 'show'])->name('suppliers.show');
         Route::post('suppliers/{supplier}/toggle-active', [SupplierController::class, 'toggleActive'])->name('suppliers.toggle-active');
 
         Route::resource('purchase-orders', PurchaseOrderController::class)->except(['show', 'edit', 'update', 'destroy']);
@@ -102,6 +107,9 @@ Route::middleware('auth')->group(function () {
         Route::patch('purchase-orders/{purchaseOrder}/discount', [PurchaseOrderController::class, 'updateDiscount'])->name('purchase-orders.update-discount');
         Route::get('purchase-orders/{purchaseOrder}/receive', [PurchaseOrderController::class, 'receiveForm'])->name('purchase-orders.receive-form');
         Route::post('purchase-orders/{purchaseOrder}/receive', [PurchaseOrderController::class, 'receive'])->name('purchase-orders.receive');
+        // v1.6 routes (previously paste-only instructions, now in the file):
+        // temporary draft autosave, and deleting one line of a purchase
+        // order (guarded inside destroyItem: only when the line has no sale).
         Route::post('purchase-orders/draft', [PurchaseOrderController::class, 'storeDraft'])->name('purchase-orders.draft');
         Route::delete('purchase-orders/{purchaseOrder}/items/{item}', [PurchaseOrderController::class, 'destroyItem'])->name('purchase-orders.items.destroy');
         Route::get('products-ajax-search', [ProductController::class, 'ajaxSearch'])->name('products.ajax-search');

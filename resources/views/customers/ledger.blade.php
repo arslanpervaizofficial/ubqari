@@ -355,7 +355,7 @@ document.getElementById('ledger-whatsapp-btn').addEventListener('click', async f
     btn.textContent = 'Preparing PDF...';
 
     const area = document.getElementById('ledger-print-area');
-    const filename = {!! json_encode(\Illuminate\Support\Str::slug($customer->name) . '-ledger.pdf') !!};
+    const filename = @json(\Illuminate\Support\Str::slug($customer->name) . '-ledger.pdf');
 
     ledgerSetExportView(true);
     try {
@@ -393,8 +393,8 @@ document.getElementById('ledger-whatsapp-btn').addEventListener('click', async f
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
             await navigator.share({
                 files: [file],
-                title: {!! json_encode($customer->name . ' — Ledger') !!},
-                text: {!! json_encode('Ledger statement for ' . $customer->name) !!},
+                title: @json($customer->name . ' — Ledger'),
+                text: @json('Ledger statement for ' . $customer->name),
             });
         } else {
             // Desktop / older browsers can't accept a file through a
@@ -403,7 +403,7 @@ document.getElementById('ledger-whatsapp-btn').addEventListener('click', async f
             // fallback: download the exact same PDF, then open WhatsApp
             // with the chat ready so it can be attached in one more tap.
             await html2pdf().set(opt).from(area).save();
-            const msg = encodeURIComponent('Ledger statement for ' + {!! json_encode($customer->name) !!} + ' — PDF just downloaded, please attach it here.');
+            const msg = encodeURIComponent('Ledger statement for ' + @json($customer->name) + ' — PDF just downloaded, please attach it here.');
             window.open('https://wa.me/?text=' + msg, '_blank');
         }
     } catch (err) {
@@ -418,12 +418,12 @@ document.getElementById('ledger-whatsapp-btn').addEventListener('click', async f
 @if($monthlyOrders->sum('count'))
 new Chart(document.getElementById('monthlyOrdersChart'), {
     data: {
-        labels: {!! json_encode($monthlyOrders->pluck('label')) !!},
+        labels: @json($monthlyOrders->pluck('label')),
         datasets: [
             {
                 type: 'bar',
                 label: 'Total (Rs)',
-                data: {!! json_encode($monthlyOrders->pluck('total')) !!},
+                data: @json($monthlyOrders->pluck('total')),
                 backgroundColor: '#3b82f6',
                 borderRadius: 6,
                 yAxisID: 'y',
@@ -431,7 +431,7 @@ new Chart(document.getElementById('monthlyOrdersChart'), {
             {
                 type: 'line',
                 label: 'Orders',
-                data: {!! json_encode($monthlyOrders->pluck('count')) !!},
+                data: @json($monthlyOrders->pluck('count')),
                 borderColor: '#c2703d',
                 backgroundColor: '#c2703d',
                 tension: 0.35,
@@ -452,10 +452,10 @@ new Chart(document.getElementById('monthlyOrdersChart'), {
 new Chart(document.getElementById('customerTopProductsChart'), {
     type: 'bar',
     data: {
-        labels: {!! json_encode($topProducts->map(fn($p) => $p->product->name ?? '—')) !!},
+        labels: @json($topProducts->map(fn($p) => $p->product->name ?? '—')),
         datasets: [{
             label: 'Qty Sold',
-            data: {!! json_encode($topProducts->pluck('qty_sold')) !!},
+            data: @json($topProducts->pluck('qty_sold')),
             backgroundColor: '#c2703d',
             borderRadius: 6,
         }]

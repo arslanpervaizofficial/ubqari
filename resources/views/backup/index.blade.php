@@ -65,7 +65,7 @@
     <h2 class="font-semibold text-red-700 mb-1">Danger Zone — Reset Database</h2>
     <p class="text-sm text-gray-500 mb-3">
         Permanently erases <strong>everything</strong> — products, customers, suppliers, orders, purchase orders, stock movements, payments, stock returns, and every user account. This cannot be undone from inside the app; the only way back is restoring a backup taken beforehand.
-        A single default admin account (<code class="bg-gray-100 px-1 rounded">admin@ubqari.pos</code> / <code class="bg-gray-100 px-1 rounded">password</code>) is recreated automatically so the system isn't left completely locked out — log in with it and change the password right away.
+        A single new admin account is recreated automatically so the system isn't left completely locked out — its one-time password is shown exactly once, right after the reset, and must be changed on first login. Copy it immediately; it is not shown again anywhere, and no default password exists.
     </p>
     <form method="POST" action="{{ route('backup.reset') }}" novalidate
           class="flex flex-wrap items-end gap-2 confirm-submit"

@@ -68,6 +68,8 @@
         <label class="block text-sm text-gray-600 mb-1">Current Stock</label>
         <input type="number" step="0.01" min="0" name="stock" value="{{ old('stock', $p->stock ?? 0) }}" required data-label="Current Stock" class="w-full border rounded px-3 py-2">
         @error('stock') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
+        {{-- H10: on edit, a changed value here is saved as a logged stock adjustment (with reason + user), not a silent overwrite — see ProductController::update(). --}}
+        @if($p)<p class="text-gray-400 text-xs mt-1">Edit par is field ki tabdeeli logged stock adjustment ke tor par save hogi.</p>@endif
     </div>
     <div class="flex flex-col justify-end">
         <label class="block text-sm text-gray-600 mb-1">Min Stock</label>

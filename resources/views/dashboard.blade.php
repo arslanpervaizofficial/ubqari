@@ -198,10 +198,10 @@ document.querySelectorAll('.oos-check').forEach(cb => {
 new Chart(document.getElementById('salesChart'), {
     type: 'line',
     data: {
-        labels: {!! json_encode($last7Days->pluck('label')) !!},
+        labels: @json($last7Days->pluck('label')),
         datasets: [{
             label: 'Sales',
-            data: {!! json_encode($last7Days->pluck('total')) !!},
+            data: @json($last7Days->pluck('total')),
             borderColor: '#3b82f6',
             backgroundColor: 'rgba(59,130,246,0.1)',
             tension: 0.35,
@@ -216,10 +216,10 @@ new Chart(document.getElementById('salesChart'), {
 new Chart(document.getElementById('topProductsChart'), {
     type: 'bar',
     data: {
-        labels: {!! json_encode($topProducts->map(fn($p) => $p->product->name ?? '—')) !!},
+        labels: @json($topProducts->map(fn($p) => $p->product->name ?? '—')),
         datasets: [{
             label: 'Qty Sold',
-            data: {!! json_encode($topProducts->pluck('qty_sold')) !!},
+            data: @json($topProducts->pluck('qty_sold')),
             backgroundColor: '#c2703d',
             borderRadius: 6,
         }]

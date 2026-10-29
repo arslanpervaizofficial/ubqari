@@ -64,20 +64,33 @@ class ExpenseController extends Controller
         ));
     }
 
-    /** Records an actual expense (Cash Out). Cash In (capital injection) no
-     *  longer has a form here — it's recorded exclusively via Cash
-     *  Management's "+ Add Capital" (see CashManagementController), which
-     *  posts to this same endpoint with type=cash_in under the hood, so
-     *  this validation still has to accept it. */
+    /** Records an actual expense (Cash Out). Cash In (capital injection)
+     *  has ONE entry point only: Cash Management's "+ Add Capital" form,
+     *  which posts to this same endpoint with type=cash_in AND a hidden
+     *  source=cash_management marker (see
+     *  cash_management/cash_management_index.blade.php). Any cash_in
+     *  submission without that marker — i.e. from the Expenses form, or
+     *  forged directly — is rejected here, even though the Expenses form
+     *  no longer offers a Cash In option at all. This keeps the
+     *  legitimate Cash Management flow working while closing the hole
+     *  that let a manager inflate Total Investment from the Expenses
+     *  page. Cash Out entries must now carry both a category and a
+     *  note (an unexplained, uncategorised capital-affecting entry is
+     *  exactly what made old Cash In rows unauditable), and no entry —
+     *  either type — may be dated in the future. */
     public function store(Request $request)
     {
         $data = $request->validate([
             'type' => ['required', 'in:cash_in,cash_out'],
             'amount' => ['required', 'numeric', 'min:0.01'],
-            'category' => ['nullable', 'string', 'max:100'],
-            'note' => ['nullable', 'string', 'max:255'],
-            'expense_date' => ['required', 'date'],
+            'category' => [$request->input('type') === 'cash_out' ? 'required' : 'nullable', 'string', 'max:100'],
+            'note' => [$request->input('type') === 'cash_out' ? 'required' : 'nullable', 'string', 'max:255'],
+            'expense_date' => ['required', 'date', 'before_or_equal:today'],
         ]);
+
+        if ($data['type'] === 'cash_in' && $request->input('source') !== 'cash_management') {
+            return back()->withErrors(['type' => 'Cash In can only be recorded from the Cash Management page (Add Capital), not from Expenses.'])->withInput();
+        }
 
         Expense::create($data + ['user_id' => auth()->id()]);
 

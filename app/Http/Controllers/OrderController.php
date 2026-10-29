@@ -103,7 +103,9 @@ class OrderController extends Controller
                 ->where('status', 'in_progress')
                 ->get()
                 ->each(function ($stray) {
-                    $stray->items()->count() > 0 ? $stray->update(['status' => 'hold']) : $stray->delete();
+                    // Empty cart: permanently discard, never send to Trash
+                    // (same v1.4 rule POSController already uses).
+                    $stray->items()->count() > 0 ? $stray->update(['status' => 'hold']) : $stray->forceDelete();
                 });
 
             $order->reverseCompletedEffects();
@@ -195,19 +197,42 @@ class OrderController extends Controller
             return back()->withErrors(['amount' => "Amount ({$data['amount']}) is more than what's still due on this order ({$order->due_amount})."]);
         }
 
-        $order->payments()->create([
-            'type' => $data['type'],
-            'amount' => $data['amount'],
-            'note' => $data['note'] ?? null,
-            'user_id' => auth()->id(),
-        ]);
+        // FIXED (H4): the order ledger and the customer's running balance
+        // used to be two ledgers for the same debt, and only the order
+        // one was updated here — Capital Receivables and the POS
+        // "previous balance" (both read customers.credit_balance) stayed
+        // wrong until someone happened to open that customer's ledger
+        // page (the only place syncBalance() runs). Now the payment row,
+        // the order totals AND the customer balance move in ONE
+        // transaction, so they can never drift apart mid-way.
+        //
+        // One deliberate scope limit: the customer balance is adjusted
+        // only when this order is COMPLETED. For an in_progress order the
+        // due has not been added to credit_balance yet (that happens at
+        // complete()), so adjusting it here would double-count — the
+        // completion step adds the (then current) due exactly once.
+        // Walk-in orders have no customer, so nothing extra is adjusted.
+        DB::transaction(function () use ($order, $data) {
+            $order->payments()->create([
+                'type' => $data['type'],
+                'amount' => $data['amount'],
+                'note' => $data['note'] ?? null,
+                'user_id' => auth()->id(),
+            ]);
 
-        if ($data['type'] === 'credit') {
-            $order->decrement('due_amount', $data['amount']);
-            $order->increment('paid_amount', $data['amount']);
-        } else {
-            $order->increment('due_amount', $data['amount']);
-        }
+            if ($data['type'] === 'credit') {
+                $order->decrement('due_amount', $data['amount']);
+                $order->increment('paid_amount', $data['amount']);
+                if ($order->customer_id && $order->status === 'completed') {
+                    $order->customer()->decrement('credit_balance', $data['amount']);
+                }
+            } else {
+                $order->increment('due_amount', $data['amount']);
+                if ($order->customer_id && $order->status === 'completed') {
+                    $order->customer()->increment('credit_balance', $data['amount']);
+                }
+            }
+        });
 
         $label = $data['type'] === 'credit' ? 'Payment recorded' : 'Charge added';
         return back()->with('status', "{$label}: {$data['amount']}. Order balance updated.");

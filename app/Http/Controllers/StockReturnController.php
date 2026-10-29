@@ -165,10 +165,38 @@ class StockReturnController extends Controller
         // actually still outstanding on that order item — re-checked here
         // against the database, not just the number the browser sent, in
         // case two return submissions for the same order overlapped.
+        // H9 — the line must also belong to that order item: same product,
+        // same customer, and a completed order. Without this, a crafted
+        // or mis-clicked submission could return product A against order
+        // item B (or credit the wrong customer) while every "remaining"
+        // check still passed.
         foreach ($data['items'] as $line) {
             if (!empty($line['order_item_id'])) {
                 $orderItem = OrderItem::find($line['order_item_id']);
-                $remaining = $orderItem ? $orderItem->remainingReturnableQuantity() : 0;
+                if (!$orderItem || !$orderItem->order) {
+                    return back()->withInput()->withErrors([
+                        'quantity' => 'A return line names an order item that no longer exists.',
+                    ]);
+                }
+                if ((int) $line['product_id'] !== (int) $orderItem->product_id) {
+                    return back()->withInput()->withErrors([
+                        'quantity' => "Product mismatch: this return line's product does not match the order item it was loaded from.",
+                    ]);
+                }
+                if ($orderItem->order->status !== 'completed') {
+                    return back()->withInput()->withErrors([
+                        'quantity' => "Order {$orderItem->order->order_number} is not completed, so nothing from it can be returned.",
+                    ]);
+                }
+                // Loose comparison on purpose: the form posts strings,
+                // the order stores ints, and null (walk-in) must only
+                // match null — null == 0 is false in PHP, so this is safe.
+                if ($orderItem->order->customer_id != ($data['customer_id'] ?? null)) {
+                    return back()->withInput()->withErrors([
+                        'quantity' => 'Customer mismatch: this return line belongs to a different customer than the one selected.',
+                    ]);
+                }
+                $remaining = $orderItem->remainingReturnableQuantity();
                 if ($line['quantity'] > $remaining) {
                     return back()->withInput()->withErrors([
                         'quantity' => "{$orderItem?->product?->name}: only {$remaining} {$orderItem?->product?->unit} left returnable from that order — the rest was already returned.",
@@ -212,24 +240,33 @@ class StockReturnController extends Controller
                     'stock_return_id' => $stockReturn->id,
                 ]);
 
-                // If tied to a customer, reduce what they owe as a credit
-                // note — by the NET amount (after this line's discount),
-                // never the full undiscounted price. $customer->credit_balance
-                // reflects each prior line's decrement already (Eloquent
-                // updates the in-memory attribute), so a second line for the
-                // same customer never over-refunds beyond what they actually
-                // still owe.
-                if ($customer) {
-                    $refundAmount = min($netAmount, $customer->credit_balance);
-                    if ($refundAmount > 0) {
-                        $customer->payments()->create([
-                            'type' => 'credit',
-                            'amount' => $refundAmount,
-                            'note' => 'Stock return: ' . $product->name . ' x' . $line['quantity'],
-                            'user_id' => auth()->id(),
-                        ]);
-                        $customer->decrement('credit_balance', $refundAmount);
-                    }
+                // H6 — if tied to a customer, record the FULL net refund
+                // (after this line's discount), never silently $0. The old
+                // code capped the refund at credit_balance, so a customer
+                // who had paid cash in full (balance 0) got no refund
+                // record at all, and a partial balance made the excess
+                // simply vanish. Now the whole net amount is credited and
+                // credit_balance is allowed to go negative — that negative
+                // balance IS the advance the shop owes the customer, and it
+                // is visible in the ledger instead of invisible. The
+                // payment row is linked to this return (stock_return_id)
+                // so StockReturn::reverseEffects() can reverse exactly
+                // this credit if the return is ever moved to Trash.
+                // CustomerPayment's $fillable does not list
+                // stock_return_id, so the link is set with forceFill()
+                // after creation rather than through mass assignment.
+                // $customer->credit_balance reflects each prior line's
+                // decrement already (Eloquent updates the in-memory
+                // attribute), so multi-line returns accumulate correctly.
+                if ($customer && $netAmount > 0) {
+                    $payment = $customer->payments()->create([
+                        'type' => 'credit',
+                        'amount' => $netAmount,
+                        'note' => 'Stock return: ' . $product->name . ' x' . $line['quantity'],
+                        'user_id' => auth()->id(),
+                    ]);
+                    $payment->forceFill(['stock_return_id' => $stockReturn->id])->save();
+                    $customer->decrement('credit_balance', $netAmount);
                 }
             }
         });
@@ -361,11 +398,40 @@ class StockReturnController extends Controller
         // A line loaded from a real PO must never return more than what's
         // actually still outstanding on that PO item — re-checked here
         // against the database, not just the number the browser sent.
+        // H9 — the line must also belong to that PO item: same product
+        // and same supplier. Without this, goods from one supplier's PO
+        // could be returned against another supplier's PO while every
+        // "remaining" check still passed. Quantities are also combined
+        // per PO item first, so the same item on two lines cannot
+        // over-return in one submission.
+        $requiredByPoItem = [];
+        foreach ($data['items'] as $line) {
+            if (!empty($line['purchase_order_item_id'])) {
+                $requiredByPoItem[$line['purchase_order_item_id']] = ($requiredByPoItem[$line['purchase_order_item_id']] ?? 0) + $line['quantity'];
+            }
+        }
         foreach ($data['items'] as $line) {
             if (!empty($line['purchase_order_item_id'])) {
                 $poItem = PurchaseOrderItem::find($line['purchase_order_item_id']);
-                $remaining = $poItem ? $poItem->remainingReturnableQuantity() : 0;
-                if ($line['quantity'] > $remaining) {
+                if (!$poItem || !$poItem->purchaseOrder) {
+                    return back()->withInput()->withErrors([
+                        'quantity' => 'A return line names a purchase order item that no longer exists.',
+                    ]);
+                }
+                if ((int) $line['product_id'] !== (int) $poItem->product_id) {
+                    return back()->withInput()->withErrors([
+                        'quantity' => "Product mismatch: this return line's product does not match the purchase order item it was loaded from.",
+                    ]);
+                }
+                // Loose comparison on purpose: the form posts strings,
+                // the PO stores ints.
+                if ($poItem->purchaseOrder->supplier_id != $data['supplier_id']) {
+                    return back()->withInput()->withErrors([
+                        'quantity' => 'Supplier mismatch: this return line belongs to a different supplier than the one selected.',
+                    ]);
+                }
+                $remaining = $poItem->remainingReturnableQuantity();
+                if ($requiredByPoItem[$line['purchase_order_item_id']] > $remaining) {
                     return back()->withInput()->withErrors([
                         'quantity' => "{$poItem?->product?->name}: only {$remaining} {$poItem?->product?->unit} left returnable from that PO — the rest was already returned.",
                     ]);
@@ -406,22 +472,67 @@ class StockReturnController extends Controller
                     'user_id' => auth()->id(),
                     'stock_return_id' => $stockReturn->id,
                 ]);
+
+                // H8 — keep the PO invariant: a supplier return reduces
+                // the PO line's received_quantity by the returned amount
+                // and the PO totals are recomputed from the reduced
+                // figures. Before this, the PO kept showing the full
+                // received quantity and total after a return, which made
+                // the whole-PO delete guard (stock < received) refuse
+                // forever and made a Trash restore add the returned units
+                // back a second time. Because received_quantity is now
+                // the NET held quantity, reverse/restoreReceivedEffects()
+                // — which both use received_quantity as-is — stay correct
+                // with no change, and remainingReturnableQuantity() is
+                // simply that net figure (see PurchaseOrderItem).
+                if ($poItem) {
+                    $poItem->decrement('received_quantity', $line['quantity']);
+                    if ((float) $poItem->fresh()->received_quantity < 0) {
+                        throw new \RuntimeException(
+                            "Supplier return for \"{$product->name}\" exceeds what PO #{$poItem->purchase_order_id} still holds."
+                        );
+                    }
+                    $this->recalculatePoTotals($poItem->purchaseOrder);
+                }
             }
         });
 
         return redirect()->route('stock-returns.index')->with('status', 'Supplier stock return recorded — stock and purchase report updated.');
     }
 
+    /** Recomputes a PO's subtotal/discount/total from its lines' current
+     *  (net, post-return) received quantities — the same formula
+     *  PurchaseOrderController::recalculateTotals() uses, duplicated here
+     *  because that method is private to that controller. */
+    private function recalculatePoTotals(PurchaseOrder $purchaseOrder): void
+    {
+        $subtotal = $purchaseOrder->items()->get()->sum(fn ($item) => $item->received_quantity * $item->net_cost_price);
+        $discountAmount = round($subtotal * ($purchaseOrder->discount_percent / 100), 2);
+        $purchaseOrder->update([
+            'subtotal' => round($subtotal, 2),
+            'discount_amount' => $discountAmount,
+            'total' => round($subtotal - $discountAmount, 2),
+        ]);
+    }
+
     /** Moves a stock return to Trash — reverses the stock effect it had
      *  first (same principle as deleting a Sales Order or Purchase Order),
      *  so stock stays accurate while it's sitting in Trash. Restoring it
-     *  from Trash puts that effect back. Admin only (see routes/web.php). */
+     *  from Trash puts that effect back. Admin only (see routes/web.php).
+     *  M9 — a reverse that would drive stock negative throws in
+     *  reverseEffects(); it is caught here and shown as a plain error
+     *  instead of a 500 page, and the transaction rolls back so nothing
+     *  is half-applied. */
     public function destroy(StockReturn $stockReturn)
     {
-        DB::transaction(function () use ($stockReturn) {
-            $stockReturn->reverseEffects();
-            $stockReturn->delete();
-        });
+        try {
+            DB::transaction(function () use ($stockReturn) {
+                $stockReturn->reverseEffects();
+                $stockReturn->delete();
+            });
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['error' => $e->getMessage()]);
+        }
 
         return back()->with('status', 'Stock return moved to Trash — stock adjusted back.');
     }
@@ -433,12 +544,16 @@ class StockReturnController extends Controller
         $ids = (array) $request->input('ids', []);
         $items = StockReturn::whereIn('id', $ids)->get();
 
-        DB::transaction(function () use ($items) {
-            foreach ($items as $item) {
-                $item->reverseEffects();
-                $item->delete();
-            }
-        });
+        try {
+            DB::transaction(function () use ($items) {
+                foreach ($items as $item) {
+                    $item->reverseEffects();
+                    $item->delete();
+                }
+            });
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['error' => $e->getMessage()]);
+        }
 
         return back()->with('status', count($items) . ' stock return(s) moved to Trash — stock adjusted back.');
     }
@@ -460,12 +575,16 @@ class StockReturnController extends Controller
             ->whereBetween('created_at', [$from, $to . ' 23:59:59'])
             ->get();
 
-        DB::transaction(function () use ($items) {
-            foreach ($items as $item) {
-                $item->reverseEffects();
-                $item->delete();
-            }
-        });
+        try {
+            DB::transaction(function () use ($items) {
+                foreach ($items as $item) {
+                    $item->reverseEffects();
+                    $item->delete();
+                }
+            });
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['error' => $e->getMessage()]);
+        }
 
         return back()->with('status', count($items) . ' stock return(s) moved to Trash — stock adjusted back.');
     }

@@ -24,6 +24,8 @@
         <form method="POST" action="{{ route('expenses.store') }}" novalidate class="flex flex-wrap items-end gap-3">
             @csrf
             <input type="hidden" name="type" value="cash_in">
+            {{-- Marks this as the one legitimate Cash In entry point: ExpenseController rejects cash_in without this marker (the Expenses form no longer offers Cash In at all). --}}
+            <input type="hidden" name="source" value="cash_management">
             <div>
                 <label class="block text-sm text-gray-600 mb-1">Amount</label>
                 <input type="number" step="0.01" min="0.01" name="amount" required data-label="Amount" class="border rounded px-3 py-2 w-32">
@@ -101,7 +103,7 @@
             <td class="p-3 space-x-1 whitespace-nowrap">
                 <a href="{{ route('cash-management.show', $p) }}" class="btn btn-gray">View Ledger</a>
                 @if(auth()->user()->role === 'admin')
-                <form method="POST" action="{{ route('cash-management.destroy-party', $p) }}" class="inline confirm-submit" data-confirm-message="Delete {{ $p->name }} and their entire transaction history? This cannot be undone.">
+                <form method="POST" action="{{ route('cash-management.destroy-party', $p) }}" class="inline confirm-submit" data-confirm-message="Move {{ $p->name }} to Trash? Their transaction history will be kept.">
                     @csrf @method('DELETE')<button class="btn btn-red">Delete</button>
                 </form>
                 @endif

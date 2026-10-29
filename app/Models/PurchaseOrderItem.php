@@ -23,12 +23,21 @@ class PurchaseOrderItem extends Model
         return round($this->quantity * $this->net_cost_price, 2);
     }
 
-    /** How much of what was actually RECEIVED into stock (not necessarily
-     *  what was originally ordered — suppliers often short/over-ship)
-     *  hasn't already been sent back in an earlier, separate return. Always
+    /** How much of this line can still be sent back to the supplier.
+     *
+     *  H8 INVARIANT CHANGE — received_quantity now means the NET quantity
+     *  still held from this line: StockReturnController::supplierStore()
+     *  reduces received_quantity by every returned quantity at return
+     *  time (and recomputes the PO totals), so the returns have ALREADY
+     *  been subtracted from this figure. Subtracting returns()->sum()
+     *  again here would double-count them and understate what is still
+     *  returnable, so remaining returnable is simply the net held
+     *  quantity. The gross historical returned total is still available
+     *  via returns()->sum('quantity') where a caller needs it (e.g. the
+     *  updateItem() floor guard and the line-delete block check). Always
      *  check this server-side before accepting a new return for the item. */
     public function remainingReturnableQuantity(): float
     {
-        return max(0, $this->received_quantity - $this->returns()->sum('quantity'));
+        return max(0, (float) $this->received_quantity);
     }
 }

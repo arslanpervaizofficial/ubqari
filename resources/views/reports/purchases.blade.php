@@ -59,7 +59,7 @@
 @foreach($purchaseOrders as $po)
     <div class="bg-white rounded-xl shadow-sm p-4">
         <div class="flex justify-between items-center mb-2">
-            <div class="font-semibold">PO #{{ $po->id }} — {{ $po->supplier->name }}</div>
+            <div class="font-semibold">PO #{{ $po->id }} — {{ $po->supplier->name ?? '— (deleted supplier)' }}</div>
             <span class="text-xs px-2 py-1 rounded-full {{ $po->status === 'received' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700' }}">{{ $po->status }}</span>
         </div>
         <table class="w-full text-sm">

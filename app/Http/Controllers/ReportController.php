@@ -11,6 +11,7 @@ use App\Models\Product;
 use App\Models\PurchaseOrder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class ReportController extends Controller
 {
@@ -20,8 +21,16 @@ class ReportController extends Controller
         $from = $request->input('from', now()->startOfMonth()->toDateString());
         $to = $request->input('to', now()->toDateString());
 
+        // FIXED (v2, H24): filter completed orders by when the sale
+        // actually completed, not when the cart was opened. A cart opened
+        // 30 Sep and completed 2 Oct used to count in September here
+        // while the Capital breakdowns counted it in October (they
+        // already use COALESCE(original_completed_at, created_at)).
+        // original_completed_at is null for orders completed before that
+        // column existed, so COALESCE falls back to created_at.
+        $completedAt = DB::raw('COALESCE(original_completed_at, created_at)');
         $orders = Order::where('status', 'completed')
-            ->whereBetween('created_at', [$from, $to . ' 23:59:59']);
+            ->whereBetween($completedAt, [$from, $to . ' 23:59:59']);
 
         $grossSales = (float) (clone $orders)->sum('total');
         $totalReturnsValue = (float) (\App\Models\StockReturn::where('type', 'from_customer')
@@ -38,7 +47,7 @@ class ReportController extends Controller
         $totalOrders = (clone $orders)->count();
 
         $bestSelling = OrderItem::select('product_id', DB::raw('SUM(quantity) as qty_sold'))
-            ->whereHas('order', fn ($q) => $q->where('status', 'completed')->whereBetween('created_at', [$from, $to . ' 23:59:59']))
+            ->whereHas('order', fn ($q) => $q->where('status', 'completed')->whereBetween(DB::raw('COALESCE(original_completed_at, created_at)'), [$from, $to . ' 23:59:59']))
             ->groupBy('product_id')
             ->with('product')
             ->get()
@@ -56,22 +65,80 @@ class ReportController extends Controller
             ->values();
 
         $cashierSales = Order::where('status', 'completed')
-            ->whereBetween('created_at', [$from, $to . ' 23:59:59'])
+            ->whereBetween($completedAt, [$from, $to . ' 23:59:59'])
             ->select('user_id', DB::raw('SUM(total) as total_sales'), DB::raw('COUNT(*) as order_count'))
             ->groupBy('user_id')
             ->with('cashier')
             ->get();
 
-        return view('reports.index', compact('from', 'to', 'grossSales', 'totalReturnsValue', 'totalSales', 'totalOrders', 'bestSelling', 'cashierSales'));
+        // FIXED (v2, M15): the cashier column used to be gross while the
+        // page total above is net of returns, so the column never added
+        // up to the page total. Returns are grouped by the ORIGINAL
+        // order's cashier (via stock_returns.order_id) so the view can
+        // show a net figure next to each gross figure. Returns with no
+        // order link cannot be attributed to a cashier; they still count
+        // in the page-level Total Sales above, which is why a cashier
+        // net column and the page total can differ by that unattributed
+        // amount — the view says so explicitly.
+        $cashierReturns = \App\Models\StockReturn::where('type', 'from_customer')
+            ->whereBetween('created_at', [$from, $to . ' 23:59:59'])
+            ->whereNotNull('order_id')
+            ->join('orders', 'stock_returns.order_id', '=', 'orders.id')
+            ->select('orders.user_id', DB::raw('SUM(stock_returns.quantity * stock_returns.unit_price - stock_returns.discount_amount) as returns_total'))
+            ->groupBy('orders.user_id')
+            ->pluck('returns_total', 'user_id')
+            ->map(fn ($v) => (float) $v)
+            ->all();
+
+        return view('reports.index', compact('from', 'to', 'grossSales', 'totalReturnsValue', 'totalSales', 'totalOrders', 'bestSelling', 'cashierSales', 'cashierReturns'));
     }
 
     public function cashReconciliation(Request $request)
     {
         $date = $request->input('date', today()->toDateString());
-        $recordedCash = Order::where('status', 'completed')
-            ->where('payment_method', 'cash')
-            ->whereDate('created_at', $date)
-            ->sum('paid_amount');
+
+        // FIXED (v2, H23 + H24 + M14) — three separate bugs lived in the
+        // old one-liner (payment_method=cash, created_at, full paid_amount):
+        // (1) H23: the cash half of a split payment was invisible, because
+        // only payment_method='cash' rows were summed and the split cash
+        // amount was stored nowhere. Now the cash portion per order is:
+        // orders.cash_amount when that column exists and is set, else
+        // paid_amount for cash orders, else 0 (bank-only / split rows
+        // from before the cash_amount column existed contribute 0 rather
+        // than a guessed split — see CHANGES.txt).
+        // (2) H24: the date filter now uses the completion date
+        // (COALESCE(original_completed_at, created_at)), matching the
+        // Capital breakdowns, instead of the cart-opened date.
+        // (3) M14: for walk-in orders (no customer row) an overpayment is
+        // change handed back, not till cash — so a walk-in order's cash
+        // contribution is capped at its total. For a named customer an
+        // overpayment is a genuine advance that stays in the till, so it
+        // is NOT capped. Computed per order in PHP (one day's orders, a
+        // small set) so the walk-in cap and the column fallback stay
+        // readable instead of being buried in a SQL CASE.
+        $hasCashAmount = Schema::hasColumn('orders', 'cash_amount');
+        $columns = ['customer_id', 'payment_method', 'paid_amount', 'total'];
+        if ($hasCashAmount) {
+            $columns[] = 'cash_amount';
+        }
+        $recordedCash = 0.0;
+        Order::where('status', 'completed')
+            ->whereDate(DB::raw('COALESCE(original_completed_at, created_at)'), $date)
+            ->get($columns)
+            ->each(function ($order) use (&$recordedCash, $hasCashAmount) {
+                if ($hasCashAmount && $order->cash_amount !== null) {
+                    $cash = (float) $order->cash_amount;
+                } elseif ($order->payment_method === 'cash') {
+                    $cash = (float) $order->paid_amount;
+                } else {
+                    $cash = 0.0;
+                }
+                if ($order->customer_id === null) {
+                    $cash = min($cash, (float) $order->total);
+                }
+                $recordedCash += $cash;
+            });
+        $recordedCash = round($recordedCash, 2);
 
         $countedCash = null;
         $mismatch = null;
@@ -137,8 +204,19 @@ class ReportController extends Controller
         $from = $request->input('from', now()->startOfMonth()->toDateString());
         $to = $request->input('to', now()->toDateString());
 
+        // FIXED (v2, H24): a purchase order used to be counted in the
+        // month it was CREATED, even if the stock arrived months later,
+        // because purchase_orders had no received-date column to filter
+        // on. Filter by received_at when that column exists (falling
+        // back per-row to created_at for rows received before the column
+        // existed), and by created_at when the column is absent entirely
+        // (Schema::hasColumn guard, so this file works before the
+        // migration that adds received_at is run).
+        $poDate = Schema::hasColumn('purchase_orders', 'received_at')
+            ? DB::raw('COALESCE(received_at, created_at)')
+            : 'created_at';
         $purchaseOrders = PurchaseOrder::with('supplier', 'items.product')
-            ->whereBetween('created_at', [$from, $to . ' 23:59:59'])
+            ->whereBetween($poDate, [$from, $to . ' 23:59:59'])
             ->latest()
             ->get();
 
@@ -164,7 +242,11 @@ class ReportController extends Controller
     {
         Order::purgeStaleInProgress();
 
-        $customers = Customer::withCount(['orders' => fn ($q) => $q->where('status', '!=', 'in_progress')])
+        // FIXED (v2, audit note): the named-customer order count used
+        // status != 'in_progress', which counted held/draft orders, while
+        // the walk-in count below is completed-only. Both are now
+        // completed-only so the two figures mean the same thing.
+        $customers = Customer::withCount(['orders' => fn ($q) => $q->where('status', 'completed')])
             ->withSum(['orders as total_purchased' => fn ($q) => $q->where('status', 'completed')], 'total')
             ->orderByDesc('total_purchased')
             ->get();

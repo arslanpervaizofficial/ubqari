@@ -84,12 +84,15 @@
         </table>
     </div>
     <div class="bg-white p-5 rounded-xl shadow-sm">
-        <h2 class="font-semibold mb-2">Cashier-wise Sales</h2>
+        {{-- FIXED (v2, M15): this column used to be labelled just "Cashier-wise Sales" while it was actually gross, and it never added up to the net page total above. It is now labelled gross, and a net figure (gross minus that cashier's customer returns in this range) is shown next to it. --}}
+        <h2 class="font-semibold mb-2">Cashier-wise Sales (gross, before returns)</h2>
         <table class="w-full text-sm">
+            <tr class="text-gray-500"><th class="text-left font-normal py-1">Cashier</th><th class="text-right font-normal">Gross</th><th class="text-right font-normal">Net</th></tr>
             @foreach($cashierSales as $c)
-                <tr class="border-t"><td class="py-1">{{ $c->cashier->name ?? '—' }}</td><td class="text-right">{{ number_format($c->total_sales,2) }} ({{ $c->order_count }} orders)</td></tr>
+                <tr class="border-t"><td class="py-1">{{ $c->cashier->name ?? '—' }}</td><td class="text-right">{{ number_format($c->total_sales,2) }} ({{ $c->order_count }} orders)</td><td class="text-right">{{ number_format($c->total_sales - ($cashierReturns[$c->user_id] ?? 0), 2) }}</td></tr>
             @endforeach
         </table>
+        <p class="text-xs text-gray-400 mt-2">Net = gross minus that cashier's customer returns in this range. The page Total Sales above nets ALL returns, including any return not linked to an order, so the net column here can differ from that total by the unattributed amount.</p>
     </div>
 </div>
 </div>

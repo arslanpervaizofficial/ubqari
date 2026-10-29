@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Customer;
+use App\Models\CashParty;
 use App\Models\CustomerPayment;
 use App\Models\Expense;
 use App\Models\Order;
@@ -32,6 +33,7 @@ class TrashController extends Controller
         'stock-returns' => ['model' => StockReturn::class, 'label' => 'Stock Returns', 'roles' => ['admin', 'manager']],
         'expenses' => ['model' => Expense::class, 'label' => 'Expenses', 'roles' => ['admin', 'manager']],
         'users' => ['model' => User::class, 'label' => 'Users', 'roles' => ['admin']],
+        'cash-parties' => ['model' => CashParty::class, 'label' => 'Cash Parties', 'roles' => ['admin', 'manager']],
     ];
 
     /** Only the types the current user's role is allowed to manage. */
@@ -52,6 +54,7 @@ class TrashController extends Controller
     {
         $types = $this->availableTypes();
         $trashed = [];
+        $trashedCounts = [];
         foreach ($types as $slug => $t) {
             /** @var Model $model */
             $model = $t['model'];
@@ -60,9 +63,20 @@ class TrashController extends Controller
             if ($slug === 'purchase-orders') $query->with('supplier');
             if ($slug === 'stock-returns') $query->with('product', 'customer', 'supplier');
             if ($slug === 'customer-payments') $query->with('customer', 'user');
-            $trashed[$slug] = $query->get();
+            // FIXED (v2, M16): this used to load EVERY trashed row of
+            // all 8 types with ->get(), so the page degraded linearly
+            // as Trash grew. Each type is now capped at the latest 200
+            // rows for display, with the true total passed separately
+            // so the tab still shows the real count. Restore and
+            // force-delete are NOT affected: they operate on selected
+            // ids (restore()/forceDelete()) or on the full trashed set
+            // (restoreAll()/forceDeleteAll()), never on this capped
+            // display list — so "Restore All" still restores rows that
+            // are not shown on this page.
+            $trashedCounts[$slug] = $model::onlyTrashed()->count();
+            $trashed[$slug] = $query->limit(200)->get();
         }
-        return view('trash.index', compact('types', 'trashed'));
+        return view('trash.index', compact('types', 'trashed', 'trashedCounts'));
     }
 
     /** Restores the checked rows. Sales orders get their stock/ledger
@@ -75,7 +89,14 @@ class TrashController extends Controller
         $model = $this->resolveModel($type);
         $ids = (array) $request->input('ids', []);
         $items = $model::onlyTrashed()->whereIn('id', $ids)->get();
-        $this->restoreEach($items);
+        try {
+            $this->restoreEach($items);
+        } catch (\RuntimeException $e) {
+            // A refused restore (see restoreEach()) must come back as a
+            // readable message, not a 500 page — nothing was changed,
+            // because the refusal happens before any mutation.
+            return back()->withErrors(['error' => $e->getMessage()]);
+        }
         return back()->with('status', count($items) . ' item(s) restored.');
     }
 
@@ -83,12 +104,74 @@ class TrashController extends Controller
     {
         $model = $this->resolveModel($type);
         $items = $model::onlyTrashed()->get();
-        $this->restoreEach($items);
+        try {
+            $this->restoreEach($items);
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['error' => $e->getMessage()]);
+        }
         return back()->with('status', count($items) . ' item(s) restored.');
     }
 
+    /** Refuses a restore with a clear message instead of corrupting data
+     *  or crashing, in two situations the old code got wrong:
+     *
+     *  FIXED (v2, H21) — stock guard on restore, mirroring the guard
+     *  PurchaseOrder::reverseReceivedEffects() already has on delete:
+     *  restoring a completed order re-deducts its full quantities, and
+     *  restoring a to_supplier return re-deducts its quantity, so if
+     *  those goods have since been sold again the restore would drive
+     *  stock negative. Any line that would take stock below 0 now
+     *  refuses the WHOLE restore batch before anything is mutated.
+     *  (Restoring a received PO only ADDS stock, and restoring a
+     *  from_customer return only adds stock, so neither needs this
+     *  guard.) This is a pre-check, not a row lock: it matches the
+     *  existing PO reverse guard's approach, and the restore itself
+     *  still runs inside one transaction.
+     *
+     *  FIXED (v2, H22-part) — trashed/missing parent customer: the old
+     *  code called restoreEffect()/restoreCompletedEffects() blindly.
+     *  For a CustomerPayment that meant a fatal error on null (the
+     *  belongsTo relation excludes soft-deleted parents); for an Order
+     *  it meant a silent no-op (the increment UPDATE matches 0 rows),
+     *  so the order came back but its credit restoration was quietly
+     *  lost. Restoring a payment or an order whose customer is still in
+     *  Trash — or no longer exists at all — is now blocked with a
+     *  message telling the user to restore the customer first. */
     private function restoreEach($items): void
     {
+        foreach ($items as $item) {
+            if ($item instanceof Order) {
+                if ($item->customer_id) {
+                    if (Customer::onlyTrashed()->where('id', $item->customer_id)->exists()) {
+                        throw new \RuntimeException("Can't restore order {$item->order_number}: its customer is still in Trash. Restore the customer first, then restore this order.");
+                    }
+                    if (!Customer::withTrashed()->where('id', $item->customer_id)->exists()) {
+                        throw new \RuntimeException("Can't restore order {$item->order_number}: its customer no longer exists, so the order's credit effect cannot be re-applied.");
+                    }
+                }
+                if ($item->status === 'completed') {
+                    foreach ($item->items()->with('product')->get() as $line) {
+                        if ($line->product && $line->product->stock < $line->quantity) {
+                            throw new \RuntimeException("Can't restore order {$item->order_number}: \"{$line->product->name}\" only has {$line->product->stock} in stock, but restoring this order would deduct {$line->quantity} again — some of it has already been sold again. Sell or adjust stock first, or leave this order in Trash.");
+                        }
+                    }
+                }
+            } elseif ($item instanceof StockReturn) {
+                if ($item->type === 'to_supplier' && $item->product && $item->product->stock < $item->quantity) {
+                    throw new \RuntimeException("Can't restore this supplier return: \"{$item->product->name}\" only has {$item->product->stock} in stock, but restoring the return would deduct {$item->quantity} again.");
+                }
+            } elseif ($item instanceof CustomerPayment) {
+                if ($item->customer_id) {
+                    if (Customer::onlyTrashed()->where('id', $item->customer_id)->exists()) {
+                        throw new \RuntimeException("Can't restore this ledger entry: its customer is still in Trash. Restore the customer first, then restore this entry.");
+                    }
+                    if (!Customer::withTrashed()->where('id', $item->customer_id)->exists()) {
+                        throw new \RuntimeException("Can't restore this ledger entry: its customer no longer exists, so the entry's balance effect cannot be re-applied.");
+                    }
+                }
+            }
+        }
+
         DB::transaction(function () use ($items) {
             foreach ($items as $item) {
                 if ($item instanceof Order) {

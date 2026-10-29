@@ -172,8 +172,12 @@ document.getElementById('print-thermal-btn').addEventListener('click', function 
         .big { font-size: ${f + 4}px; font-weight: 800; margin: 3px 0; }
         .foot { font-size: ${f - 2}px; font-weight: 700; }
     `;
+    // FIXED (XSS): every raw json_encode echo in this file's script
+    // blocks is replaced with Blade's @json(), which hex-escapes <, > and
+    // & — plain json_encode() does not, so a name containing a closing
+    // script tag could previously break out of the script block and run.
     const html = '<!doctype html><html><head><meta charset="utf-8"><title>' +
-        {!! json_encode($order->order_number) !!} + '</title><style>' + css + '</style></head><body>' +
+        @json($order->order_number) + '</title><style>' + css + '</style></head><body>' +
         document.getElementById('thermal-template').innerHTML + '</body></html>';
 
     // A real (small) window of its own: its @page size/margin:0 are honoured
@@ -194,7 +198,7 @@ document.getElementById('print-thermal-btn').addEventListener('click', function 
     }, 300);
 });
 
-const invoiceFilename = {!! json_encode($order->order_number . '.pdf') !!};
+const invoiceFilename = @json($order->order_number . '.pdf');
 function buildInvoicePdfOpt() {
     const card = document.getElementById('invoice-card');
     return {
@@ -259,8 +263,8 @@ document.getElementById('whatsapp-pdf-btn').addEventListener('click', async func
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
             await navigator.share({
                 files: [file],
-                title: {!! json_encode('Invoice ' . $order->order_number) !!},
-                text: {!! json_encode('Invoice ' . $order->order_number . ' — ' . ($order->customer->name ?? 'Walk-in')) !!},
+                title: @json('Invoice ' . $order->order_number),
+                text: @json('Invoice ' . $order->order_number . ' — ' . ($order->customer->name ?? 'Walk-in')),
             });
         } else {
             // Desktop / unsupported browsers can't accept a file through a
@@ -269,7 +273,7 @@ document.getElementById('whatsapp-pdf-btn').addEventListener('click', async func
             // either way: it just downloads first, then WhatsApp opens
             // with a message ready so it's one more "attach" tap to send.
             await html2pdf().set(buildInvoicePdfOpt()).from(document.getElementById('invoice-card')).save();
-            const msg = encodeURIComponent('Invoice ' + {!! json_encode($order->order_number) !!} + ' — PDF just downloaded, please attach it here.');
+            const msg = encodeURIComponent('Invoice ' + @json($order->order_number) + ' — PDF just downloaded, please attach it here.');
             window.open('https://wa.me/?text=' + msg, '_blank');
         }
     } catch (err) {

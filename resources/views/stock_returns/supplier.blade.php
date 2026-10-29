@@ -59,7 +59,7 @@
 </form>
 
 <script>
-const PRODUCTS = {!! json_encode($productsForJs) !!};
+const PRODUCTS = @json($productsForJs);
 const SEARCH_URL = "{{ route('products.ajax-search') }}";
 const LOOKUP_PO_URL = "{{ route('stock-returns.lookup-purchase-order') }}";
 let lineCount = 0;

@@ -16,14 +16,8 @@
     <h2 class="font-semibold mb-3">Record an Expense</h2>
     <form method="POST" action="{{ route('expenses.store') }}" novalidate class="flex flex-wrap items-end gap-3">
         @csrf
-        <div class="flex gap-2">
-            <label class="border rounded-lg px-3 py-2 flex items-center gap-2 cursor-pointer has-[:checked]:border-green-500 has-[:checked]:bg-green-50 text-sm">
-                <input type="radio" name="type" value="cash_in" checked> Cash In
-            </label>
-            <label class="border rounded-lg px-3 py-2 flex items-center gap-2 cursor-pointer has-[:checked]:border-red-500 has-[:checked]:bg-red-50 text-sm">
-                <input type="radio" name="type" value="cash_out"> Cash Out
-            </label>
-        </div>
+        {{-- Cash Out only: Cash In is recorded exclusively from Cash Management (Add Capital) now. The controller also rejects any cash_in submitted without that page's marker, so removing the option here is backed by server-side validation, not just the UI. --}}
+        <input type="hidden" name="type" value="cash_out">
         <div>
             <label class="block text-sm text-gray-600 mb-1">Amount</label>
             <input type="number" step="0.01" min="0.01" name="amount" required data-label="Amount" class="border rounded px-3 py-2 w-36">
@@ -32,20 +26,23 @@
         <div>
             <label class="block text-sm text-gray-600 mb-1">Date</label>
             <input type="date" name="expense_date" value="{{ now()->toDateString() }}" required class="border rounded px-3 py-2">
+            @error('expense_date') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
         </div>
         <div>
-            <label class="block text-sm text-gray-600 mb-1">Category (optional)</label>
-            <input name="category" placeholder="e.g. Rent, Utilities" class="border rounded px-3 py-2 w-40">
+            <label class="block text-sm text-gray-600 mb-1">Category</label>
+            <input name="category" placeholder="e.g. Rent, Utilities" required data-label="Category" class="border rounded px-3 py-2 w-40">
+            @error('category') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
         </div>
         <div class="flex-1 min-w-[200px]">
-            <label class="block text-sm text-gray-600 mb-1">Note (optional)</label>
-            <input name="note" placeholder="e.g. Shop electricity bill for September" class="border rounded px-3 py-2 w-full">
+            <label class="block text-sm text-gray-600 mb-1">Note</label>
+            <input name="note" placeholder="e.g. Shop electricity bill for September" required data-label="Note" class="border rounded px-3 py-2 w-full">
+            @error('note') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
         </div>
         <button class="btn btn-solid-green">Save</button>
     </form>
     <p class="text-xs text-gray-400 mt-3">
-        <strong>Cash In</strong> = you're putting fresh money into the business — it counts toward Investment, not toward Expenses, so Net Remaining goes up.
         <strong>Cash Out</strong> = paying from money the business already has — it only counts toward Total Expenses, so Net Remaining goes down.
+        Putting fresh money into the business (<strong>Cash In</strong>) is recorded only from the <a href="{{ route('cash-management.index') }}" class="underline">Cash Management</a> page (Add Capital), not from here.
     </p>
 </div>
 

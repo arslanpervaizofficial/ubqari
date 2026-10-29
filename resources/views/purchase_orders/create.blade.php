@@ -114,14 +114,14 @@
 // Built entirely in the controller and passed as a plain variable — the
 // expression being echoed here has no commas and no closures, so it cannot
 // be mis-parsed the way the old inline-array version could be.
-const PRODUCTS = {!! json_encode($productsForJs) !!};
-const PRESELECTED_LINES = {!! json_encode($preselectedLines) !!};
+const PRODUCTS = @json($productsForJs);
+const PRESELECTED_LINES = @json($preselectedLines);
 // FIX 1/2 — priority for the rows this page opens with: a failed submit's
 // old input first (so NOTHING typed is lost), then a server draft, then
 // the stock-alert preselection. Draft lines use the same field names as
 // old input (quantity / cost_price), preselected lines use qty / cost.
-const OLD_LINES = {!! json_encode(old('items')) !!};
-const DRAFT_LINES = {!! json_encode($draftLines ?? []) !!};
+const OLD_LINES = @json(old('items'));
+const DRAFT_LINES = @json($draftLines ?? []);
 const DRAFT_ROUTE = "{{ Route::has('purchase-orders.draft') ? route('purchase-orders.draft') : url('purchase-orders/draft') }}";
 const CURRENT_USER_ID = {{ auth()->id() ?? 0 }};
 const SEARCH_URL = "{{ route('products.ajax-search') }}";

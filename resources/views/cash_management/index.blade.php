@@ -38,7 +38,7 @@
             <td class="p-3 space-x-1 whitespace-nowrap">
                 <a href="{{ route('cash-management.show', $p) }}" class="btn btn-gray">View Ledger</a>
                 @if(auth()->user()->role === 'admin')
-                <form method="POST" action="{{ route('cash-management.destroy-party', $p) }}" class="inline confirm-submit" data-confirm-message="Delete {{ $p->name }} and their entire transaction history? This cannot be undone.">
+                <form method="POST" action="{{ route('cash-management.destroy-party', $p) }}" class="inline confirm-submit" data-confirm-message="Move {{ $p->name }} to Trash? Their transaction history will be kept.">
                     @csrf @method('DELETE')<button class="btn btn-red">Delete</button>
                 </form>
                 @endif
