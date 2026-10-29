@@ -80,9 +80,9 @@ class ReportController extends Controller
         // in the page-level Total Sales above, which is why a cashier
         // net column and the page total can differ by that unattributed
         // amount — the view says so explicitly.
-        $cashierReturns = \App\Models\StockReturn::where('type', 'from_customer')
-            ->whereBetween('created_at', [$from, $to . ' 23:59:59'])
-            ->whereNotNull('order_id')
+        $cashierReturns = \App\Models\StockReturn::where('stock_returns.type', 'from_customer')
+            ->whereBetween('stock_returns.created_at', [$from, $to . ' 23:59:59'])
+            ->whereNotNull('stock_returns.order_id')
             ->join('orders', 'stock_returns.order_id', '=', 'orders.id')
             ->select('orders.user_id', DB::raw('SUM(stock_returns.quantity * stock_returns.unit_price - stock_returns.discount_amount) as returns_total'))
             ->groupBy('orders.user_id')
