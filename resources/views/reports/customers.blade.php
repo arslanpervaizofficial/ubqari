@@ -35,7 +35,7 @@
             <td class="p-3 font-medium">{{ $c->name }}</td>
             <td class="p-3">{{ $c->orders_count }}</td>
             <td class="p-3">{{ number_format($c->total_purchased ?? 0, 2) }}</td>
-            <td class="p-3 {{ $c->credit_balance > 0 ? 'text-red-600 font-semibold' : '' }}">{{ number_format($c->credit_balance, 2) }}</td>
+            <td class="p-3 {{ ($c->recomputed_balance ?? $c->credit_balance) > 0 ? 'text-red-600 font-semibold' : '' }}">{{ number_format($c->recomputed_balance ?? $c->credit_balance, 2) }}</td>
             <td class="p-3"><a href="{{ route('reports.customer-detail', $c) }}" class="btn btn-blue">{{ __('View Report') }}</a></td>
         </tr>
     @endforeach

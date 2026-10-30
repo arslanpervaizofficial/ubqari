@@ -35,13 +35,13 @@
             <td class="p-3 font-medium">{{ $c->name }}</td>
             <td class="p-3">{{ $c->phone }}</td>
             <td class="p-3">{{ $c->discount_percent }}%</td>
-            <td class="p-3 {{ $c->credit_balance > 0 ? 'text-red-600 font-semibold' : '' }}">{{ number_format($c->credit_balance, 2) }}</td>
+            <td class="p-3 {{ ($c->recomputed_balance ?? $c->credit_balance) > 0 ? 'text-red-600 font-semibold' : '' }}">{{ number_format($c->recomputed_balance ?? $c->credit_balance, 2) }}</td>
             <td class="p-3">
                 <span class="px-2 py-1 rounded text-xs {{ $c->is_active ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600' }}">{{ $c->is_active ? __('Active') : __('Disabled') }}</span>
             </td>
             <td class="p-3 space-x-1 whitespace-nowrap">
                 <button type="button" class="btn btn-solid-green open-payment-modal"
-                        data-customer-id="{{ $c->id }}" data-customer-name="{{ $c->name }}" data-balance="{{ $c->credit_balance }}">
+                        data-customer-id="{{ $c->id }}" data-customer-name="{{ $c->name }}" data-balance="{{ $c->recomputed_balance ?? $c->credit_balance }}">
                     + {{ __('Payment') }}
                 </button>
                 <a href="{{ route('customers.ledger', $c) }}" class="btn btn-gray">{{ __('Ledger') }}</a>

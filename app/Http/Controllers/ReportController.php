@@ -267,6 +267,13 @@ class ReportController extends Controller
         });
         $customers = $customers->sortByDesc('total_purchased')->values();
 
+        // v3.2.5: the Credit Balance column shows the recomputed
+        // balance (same as the customers list), not the stored column.
+        $balances = Customer::recomputedBalancesForIds($customers->pluck('id')->all());
+        $customers->each(function ($c) use ($balances) {
+            $c->recomputed_balance = $balances[$c->id] ?? 0.0;
+        });
+
         // Walk-in orders/returns are the ones with no customer_id at all —
         // not a Customer row, so they never show up in the list above.
         // Surfaced here as its own summary instead, also net of returns.
@@ -438,7 +445,14 @@ class ReportController extends Controller
         // did nothing to the business's standing, which is what made it
         // look like a bug rather than an incomplete picture.
         // FIXED 2026-10-29 (v1.5): Receivables now has TWO parts.
-        // (1) Named customers: Customer::sum('credit_balance') as before.
+        // (1) Named customers: v3.2.5 — sum of RECOMPUTED balances
+        // (Customer::totalRecomputedBalance()), not the stored
+        // credit_balance sum, so Capital ties exactly to the
+        // customers list and the ledger page. The stored column is
+        // only a reconciled cache; right after the one-time
+        // reconcile both methods agree, but only the recompute stays
+        // agreed when a new order-level debit lands (stored holds it,
+        // the ledger formula does not — see CHANGES-v3.2.5.txt).
         // (2) Walk-in dues: completed walk-in orders have no customer row,
         // so their due_amount used to go nowhere and never appeared in
         // Receivables at all. It is summed here from the orders
@@ -447,7 +461,7 @@ class ReportController extends Controller
         // due_amount when a walk-in customer pays, so Receivables falls
         // as those dues are collected. No POS behaviour was changed:
         // walk-in orders are NOT forced to full payment at completion.
-        $customerReceivables = (float) Customer::sum('credit_balance');
+        $customerReceivables = Customer::totalRecomputedBalance();
         $walkInDue = (float) Order::whereNull('customer_id')->where('status', 'completed')->sum('due_amount');
         $totalReceivables = $customerReceivables + $walkInDue;
         // Total Investment (new formula, see above): current stock +

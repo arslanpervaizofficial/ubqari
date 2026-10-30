@@ -61,10 +61,13 @@
         @endif
         <div>{{ $order->due_amount < 0 ? __('Advance (this order)') : __('Due (this order)') }}: {{ number_format($order->due_amount, 2) }}</div>
         @php
-            // customer->credit_balance already has THIS order's (signed)
-            // due_amount folded into it, so subtracting it back out
-            // isolates what was owed (or held in advance) beforehand.
-            $balanceNow = $order->customer ? (float) $order->customer->credit_balance : 0;
+            // v3.2.5: the recomputed ledger balance (ledgerFigures)
+            // already has THIS order's (signed) due_amount folded into
+            // it — this is a completed order, so it counts — so
+            // subtracting it back out isolates what was owed (or held
+            // in advance) beforehand. Same arithmetic as before, just
+            // drift-free: the stored column is only a reconciled cache.
+            $balanceNow = $order->customer ? (float) ($order->customer->recomputed_balance ?? $order->customer->credit_balance) : 0;
             $previousBal = $order->customer ? round($balanceNow - $order->due_amount, 2) : 0;
         @endphp
         @if($order->customer && abs($previousBal) > 0.004)

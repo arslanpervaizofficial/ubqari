@@ -49,7 +49,10 @@ class ExpenseController extends Controller
         // FIXED 2026-10-29 (v1.5): match the Capital Report — Receivables
         // includes walk-in order dues as well as named-customer credit
         // balances, otherwise this page again drifts from Capital Net.
-        $totalReceivables = (float) Customer::sum('credit_balance')
+        // v3.2.5: named part is the sum of recomputed balances (same
+        // as ReportController::capital()), not the stored sum — the
+        // two pages must stay identical (see the comment above).
+        $totalReceivables = Customer::totalRecomputedBalance()
             + (float) \App\Models\Order::whereNull('customer_id')->where('status', 'completed')->sum('due_amount');
         // v2.2, audit H15 completed — same change as ReportController::
         // capital(), kept identical so the two pages cannot drift apart

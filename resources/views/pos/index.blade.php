@@ -64,10 +64,10 @@
                 <div class="text-sm">{{ __('Overall Discount: -') }}<span id="discount">{{ number_format($order->discount_amount, 2) }}</span></div>
                 <div class="text-xl font-bold mt-1">{{ __('Total Bill Payment') }}: <span id="total">{{ number_format($order->total, 2) }}</span></div>
                 <div class="text-sm mt-1 {{ $order->customer ? '' : 'hidden' }}" id="due-payment-row">
-                    {{ __('Due Payment (previous balance)') }}: <span id="due-payment" class="{{ ($order->customer->credit_balance ?? 0) > 0 ? 'text-red-600 font-medium' : (($order->customer->credit_balance ?? 0) < 0 ? 'text-blue-700 font-medium' : '') }}">{{ number_format($order->customer->credit_balance ?? 0, 2) }}</span>
+                    {{ __('Due Payment (previous balance)') }}: <span id="due-payment" class="{{ ($order->customer->recomputed_balance ?? $order->customer->credit_balance ?? 0) > 0 ? 'text-red-600 font-medium' : (($order->customer->recomputed_balance ?? $order->customer->credit_balance ?? 0) < 0 ? 'text-blue-700 font-medium' : '') }}">{{ number_format($order->customer->recomputed_balance ?? $order->customer->credit_balance ?? 0, 2) }}</span>
                 </div>
                 <div class="text-lg font-bold mt-1 {{ $order->customer ? '' : 'hidden' }}" id="total-with-due-row">
-                    {{ __('Total Payment with Due') }}: <span id="total-with-due">{{ number_format($order->total + ($order->customer->credit_balance ?? 0), 2) }}</span>
+                    {{ __('Total Payment with Due') }}: <span id="total-with-due">{{ number_format($order->total + ($order->customer->recomputed_balance ?? $order->customer->credit_balance ?? 0), 2) }}</span>
                 </div>
             </div>
         </div>
@@ -228,7 +228,7 @@ function renderOrder(order) {
     const dueRow = document.getElementById('due-payment-row');
     const totalWithDueRow = document.getElementById('total-with-due-row');
     if (order.customer) {
-        const due = Number(order.customer.credit_balance);
+        const due = Number(order.customer.recomputed_balance ?? order.customer.credit_balance);
         const dueEl = document.getElementById('due-payment');
         dueEl.textContent = due.toFixed(2);
         dueEl.className = due > 0 ? 'text-red-600 font-medium' : (due < 0 ? 'text-blue-700 font-medium' : '');

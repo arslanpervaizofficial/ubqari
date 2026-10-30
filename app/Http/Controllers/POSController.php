@@ -63,6 +63,7 @@ class POSController extends Controller
     {
         $order = $this->getOrCreateCurrentOrder($request);
         $order->load('items.product', 'customer');
+        $this->withRecomputedBalance($order);
 
         $heldOrders = Order::where('status', 'hold')
             ->where('user_id', auth()->id())
@@ -74,6 +75,20 @@ class POSController extends Controller
         $customers = Customer::where('is_active', true)->orderBy('name')->get();
 
         return view('pos.index', compact('order', 'heldOrders', 'customers'));
+    }
+
+    /** v3.2.5: attach the recomputed ledger balance to the order's
+     *  customer as a runtime attribute (never saved), so the billing
+     *  page, its JSON responses and the invoice show ledgerFigures(),
+     *  not the stored credit_balance column. The blade/JS read
+     *  recomputed_balance ?? credit_balance, so any render path that
+     *  forgets to attach it falls back to the stored value. */
+    private function withRecomputedBalance(Order $order): Order
+    {
+        if ($order->customer) {
+            $order->customer->recomputed_balance = $order->customer->recomputedBalance();
+        }
+        return $order;
     }
 
     /** "Previous order id" field on the billing screen — loads a completed
@@ -308,7 +323,7 @@ class POSController extends Controller
 
         return response()->json([
             'success' => true,
-            'order' => $order->fresh('items.product', 'customer'),
+            'order' => $this->withRecomputedBalance($order->fresh('items.product', 'customer')),
             'available_stock' => $this->availableStock($product),
             'warning' => $warning,
         ]);
@@ -323,7 +338,7 @@ class POSController extends Controller
         $item->delete();
         $this->recalculateTotals($order);
 
-        return response()->json(['success' => true, 'order' => $order->fresh('items.product', 'customer')]);
+        return response()->json(['success' => true, 'order' => $this->withRecomputedBalance($order->fresh('items.product', 'customer'))]);
     }
 
     public function updateItemQuantity(Request $request, OrderItem $item)
@@ -367,7 +382,7 @@ class POSController extends Controller
 
         return response()->json([
             'success' => true,
-            'order' => $item->order->fresh('items.product', 'customer'),
+            'order' => $this->withRecomputedBalance($item->order->fresh('items.product', 'customer')),
             'warning' => $warning,
         ]);
     }
@@ -400,7 +415,7 @@ class POSController extends Controller
 
         return response()->json([
             'success' => true,
-            'order' => $item->order->fresh('items.product', 'customer'),
+            'order' => $this->withRecomputedBalance($item->order->fresh('items.product', 'customer')),
             'warning' => $exceedsMax
                 ? "{$item->product->name}: discount {$data['discount_percent']}% exceeds max allowed ({$item->product->max_discount_percent}%). Applied anyway — adjust if needed."
                 : null,
@@ -427,7 +442,7 @@ class POSController extends Controller
         $order->save();
         $this->recalculateTotals($order);
 
-        return response()->json(['success' => true, 'order' => $order->fresh('items.product', 'customer')]);
+        return response()->json(['success' => true, 'order' => $this->withRecomputedBalance($order->fresh('items.product', 'customer'))]);
     }
 
     public function setCustomer(Request $request)
@@ -464,7 +479,7 @@ class POSController extends Controller
         $order->save();
         $this->recalculateTotals($order);
 
-        return response()->json(['success' => true, 'order' => $order->fresh('items.product', 'customer')]);
+        return response()->json(['success' => true, 'order' => $this->withRecomputedBalance($order->fresh('items.product', 'customer'))]);
     }
 
     private function availableStock(Product $product): float
@@ -811,6 +826,7 @@ class POSController extends Controller
         // invoice (including customer details) by id.
         $this->assertPosOrderAccess($order, $request);
         $order->load('items.product', 'customer', 'cashier');
+        $this->withRecomputedBalance($order);
         return view('pos.invoice', compact('order'));
     }
 

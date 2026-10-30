@@ -79,7 +79,11 @@ class ReportExportController extends Controller
         $remainingInvestment = $stockValue + $cashInjected;
         $totalExpenses = (float) Expense::where('type', 'cash_out')->sum('amount');
         $totalLiabilities = (float) CashParty::sum('balance');
-        $totalReceivables = (float) Customer::sum('credit_balance');
+        // v3.2.5: sum of recomputed balances (same as
+        // ReportController::capital()). This export's other terms are
+        // untouched — its pre-existing omission of walk-in dues and
+        // supplier dues is a separate drift, not changed here.
+        $totalReceivables = Customer::totalRecomputedBalance();
         $netCapital = $remainingInvestment + $totalReceivables - $totalExpenses - $totalLiabilities;
 
         $totalRevenue = (float) Order::where('status', 'completed')->sum('total');
@@ -176,6 +180,13 @@ class ReportExportController extends Controller
             ->orderByDesc('total_purchased')
             ->get();
 
+        // v3.2.5: the Credit Balance column shows the recomputed
+        // balance (same as the customers list), not the stored column.
+        $balances = Customer::recomputedBalancesForIds($customers->pluck('id')->all());
+        foreach ($customers as $customer) {
+            $customer->recomputed_balance = $balances[$customer->id] ?? 0.0;
+        }
+
         $walkInOrders = Order::whereNull('customer_id')->where('status', 'completed')->count();
         $walkInTotal = (float) Order::whereNull('customer_id')->where('status', 'completed')->sum('total');
 
@@ -189,7 +200,7 @@ class ReportExportController extends Controller
                 $customer->phone,
                 $customer->orders_count,
                 $this->money((float) ($customer->total_purchased ?? 0)),
-                $this->money((float) $customer->credit_balance),
+                $this->money((float) ($customer->recomputed_balance ?? $customer->credit_balance)),
             ];
         }
 

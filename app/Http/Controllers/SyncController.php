@@ -310,7 +310,153 @@ class SyncController extends Controller
 
         $this->flagNegativeStock($touchedProductIds);
 
+        // v3.2.5: refresh the stored credit_balance of every customer
+        // this batch touched, from the recomputation — otherwise a
+        // desktop-pushed sale would leave the stored column lagging
+        // until someone opened that customer's ledger page.
+        $this->reconcileCustomerBalancesAfterPush($accepted, $changes);
+
         return response()->json(['accepted' => $accepted, 'rejected' => $rejected]);
+    }
+
+    /** v3.2.5 — sync-push balance reconciliation (see push()).
+     *
+     *  WHAT: for every customer affected by this batch's ACCEPTED
+     *  rows, recompute the stored credit_balance from ledgerFigures()
+     *  (via the bulk helper) and overwrite it when it drifted by more
+     *  than 0.004. Rejected rows never applied, so they are excluded.
+     *  Only three tables can move a customer balance: orders (a sale),
+     *  customer_payments (a ledger entry), and from_customer
+     *  stock_returns (their credit payment is itself a
+     *  customer_payments row, but the return is collected too so a
+     *  batch carrying the return without its payment still triggers
+     *  the customer). order_items, movements, POs, expenses and cash
+     *  never touch a customer balance and are ignored.
+     *
+     *  PLACEMENT: after both passes and flagNegativeStock, never
+     *  inside applyChange. push() has no batch transaction (each row
+     *  saves on its own), so "after the batch" means after every
+     *  applied row is committed; the recompute therefore reads
+     *  committed rows only.
+     *
+     *  RE-PUSH SAFETY (proof): recomputation is a pure function of
+     *  (completed orders, customer_payments). Re-push is idempotent
+     *  by construction — same client_uuid + updated_at is an ACK with
+     *  no rewrite, and a newer server row rejects the push
+     *  (server-wins) — so a re-pushed batch leaves identical source
+     *  rows, the recompute yields the identical stored value (or no
+     *  write, inside the 0.004 threshold). Re-running this method
+     *  cannot change a correct balance, and no incremental writer is
+     *  used anywhere, so replay can never double-count.
+     *
+     *  WRITE MECHANISM: a direct query update that does NOT touch
+     *  updated_at. A save() would bump updated_at, which would make
+     *  the customer row look newer and cause later desktop customer
+     *  edits to be rejected as server-wins conflicts, plus pointless
+     *  customer re-pulls. The value is a derived cache refresh, not a
+     *  user action, so no audit row is owed either.
+     *
+     *  FAILURE MODE: any failure here is logged and NEVER fails the
+     *  push response — a lagging cache self-heals on the next push,
+     *  ledger visit, or reconcile-command run, while a failed push
+     *  would block the user's sync entirely. */
+    private function reconcileCustomerBalancesAfterPush(array $accepted, array $changes): void
+    {
+        try {
+            $acceptedKeys = [];
+            $orderIds = [];
+            $paymentIds = [];
+            $returnIds = [];
+            foreach ($accepted as $entry) {
+                $table = $entry['table'] ?? null;
+                $clientUuid = $entry['client_uuid'] ?? null;
+                $serverId = $entry['server_id'] ?? null;
+                if (is_string($table) && is_string($clientUuid)) {
+                    $acceptedKeys[$table . '|' . $clientUuid] = true;
+                }
+                if (!is_int($serverId) && !is_numeric($serverId)) {
+                    continue;
+                }
+                if ($table === 'orders') {
+                    $orderIds[] = (int) $serverId;
+                } elseif ($table === 'customer_payments') {
+                    $paymentIds[] = (int) $serverId;
+                } elseif ($table === 'stock_returns') {
+                    $returnIds[] = (int) $serverId;
+                }
+            }
+            if ($acceptedKeys === []) {
+                return;
+            }
+
+            $affected = [];
+            if ($orderIds !== []) {
+                foreach (Order::withTrashed()->whereIn('id', $orderIds)->pluck('customer_id') as $cid) {
+                    if ($cid !== null) {
+                        $affected[(int) $cid] = true;
+                    }
+                }
+            }
+            if ($paymentIds !== []) {
+                foreach (CustomerPayment::withTrashed()->whereIn('id', $paymentIds)->pluck('customer_id') as $cid) {
+                    if ($cid !== null) {
+                        $affected[(int) $cid] = true;
+                    }
+                }
+            }
+            if ($returnIds !== []) {
+                foreach (StockReturn::withTrashed()->whereIn('id', $returnIds)->where('type', 'from_customer')->pluck('customer_id') as $cid) {
+                    if ($cid !== null) {
+                        $affected[(int) $cid] = true;
+                    }
+                }
+            }
+
+            // An order update that moves a sale from one customer to
+            // another leaves the OLD customer only in the incoming
+            // change data (the row now points at the new customer), so
+            // resolve customer_client_uuid from accepted changes' data
+            // as well. (The desktop cannot do this today — it has no
+            // order-customer edit — but the reconciliation must not
+            // depend on that staying true.)
+            $dataUuids = [];
+            foreach ($changes as $change) {
+                $table = $change['table'] ?? null;
+                if (!in_array($table, ['orders', 'customer_payments', 'stock_returns'], true)) {
+                    continue;
+                }
+                $clientUuid = $change['client_uuid'] ?? null;
+                if (!is_string($clientUuid) || !isset($acceptedKeys[$table . '|' . $clientUuid])) {
+                    continue;
+                }
+                $uuid = $change['data']['customer_client_uuid'] ?? null;
+                if (is_string($uuid) && Str::isUuid($uuid)) {
+                    $dataUuids[] = $uuid;
+                }
+            }
+            if ($dataUuids !== []) {
+                foreach (Customer::withTrashed()->whereIn('client_uuid', array_unique($dataUuids))->pluck('id') as $cid) {
+                    $affected[(int) $cid] = true;
+                }
+            }
+
+            $ids = array_keys($affected);
+            if ($ids === []) {
+                return;
+            }
+
+            $balances = Customer::recomputedBalancesForIds($ids);
+            $stored = Customer::whereIn('id', $ids)->pluck('credit_balance', 'id');
+            foreach ($ids as $id) {
+                $new = $balances[$id] ?? 0.0;
+                $old = (float) ($stored[$id] ?? 0);
+                if (abs($old - $new) > 0.004) {
+                    Customer::where('id', $id)->update(['credit_balance' => $new]);
+                }
+            }
+        } catch (Throwable $e) {
+            Log::warning('Sync push balance reconciliation failed; stored balances will catch up on the next push, ledger visit, or reconcile run.', ['error' => $e->getMessage()]);
+        }
     }
 
     /** GET /api/sync/pull?since=&limit=&cursor= — oldest first,

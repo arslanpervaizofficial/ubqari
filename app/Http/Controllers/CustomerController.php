@@ -30,6 +30,18 @@ class CustomerController extends Controller
     public function index(Request $request)
     {
         $customers = $this->filteredQuery($request)->orderBy('name')->paginate(20)->withQueryString();
+        // v3.2.5: the list shows the RECOMPUTED balance
+        // (ledgerFigures), not the stored credit_balance column, so
+        // the list, the ledger page and the desktop (which recomputes
+        // the same formula) can never disagree. One bulk query pair
+        // for the whole page — no per-row queries. The value rides as
+        // a runtime attribute (never saved); the blade reads
+        // recomputed_balance ?? credit_balance so any render path that
+        // forgets to attach it falls back to the stored value.
+        $balances = Customer::recomputedBalancesForIds($customers->getCollection()->pluck('id')->all());
+        foreach ($customers as $customer) {
+            $customer->recomputed_balance = $balances[$customer->id] ?? 0.0;
+        }
         return view('customers.index', compact('customers'));
     }
 
