@@ -12,7 +12,9 @@
          it must never print as a real INVOICE with the full amount
          "Due". Quotations already had their own label; drafts get
          one too, and the Paid/Due blocks below are hidden for them. --}}
-    @php($isDraft = in_array($order->status, ['in_progress', 'hold']) && !$order->is_quotation)
+    @php
+        $isDraft = in_array($order->status, ['in_progress', 'hold']) && !$order->is_quotation;
+    @endphp
     <div class="invoice-header flex justify-between mb-4">
         <div>
             <h1 class="text-xl font-bold">{{ \App\Models\AppSetting::current()->print_title }}</h1>
@@ -52,7 +54,6 @@
         <div>{{ __('Item Discounts: -') }}{{ number_format($order->line_discount_total, 2) }}</div>
         <div>{{ __('Overall Discount (') }}{{ $order->discount_percent }}%): -{{ number_format($order->discount_amount, 2) }}</div>
         <div class="font-bold text-lg">{{ __('Total') }}: {{ number_format($order->total, 2) }}</div>
-        {{-- DIAG-v323-marker --}}
         @if(!$order->is_quotation && !$isDraft)
         <div>{{ __('Paid') }}: {{ number_format($order->paid_amount, 2) }} ({{ $order->payment_method }})</div>
         @if($order->bank_name || $order->transaction_id)
