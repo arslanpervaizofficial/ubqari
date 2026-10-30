@@ -52,6 +52,7 @@
         <div>{{ __('Item Discounts: -') }}{{ number_format($order->line_discount_total, 2) }}</div>
         <div>{{ __('Overall Discount (') }}{{ $order->discount_percent }}%): -{{ number_format($order->discount_amount, 2) }}</div>
         <div class="font-bold text-lg">{{ __('Total') }}: {{ number_format($order->total, 2) }}</div>
+        {{-- DIAG-v323-marker --}}
         @if(!$order->is_quotation && !$isDraft)
         <div>{{ __('Paid') }}: {{ number_format($order->paid_amount, 2) }} ({{ $order->payment_method }})</div>
         @if($order->bank_name || $order->transaction_id)
@@ -182,7 +183,7 @@ document.getElementById('print-thermal-btn').addEventListener('click', function 
         .foot { font-size: ${f - 2}px; font-weight: 700; }
     `;
     // FIXED (XSS): every raw json_encode echo in this file's script
-    // blocks is replaced with Blade's @json(), which hex-escapes <, > and
+    // blocks is replaced with Blade's json echo directive, which hex-escapes <, > and
     // & — plain json_encode() does not, so a name containing a closing
     // script tag could previously break out of the script block and run.
     const html = '<!doctype html><html><head><meta charset="utf-8"><title>' +
