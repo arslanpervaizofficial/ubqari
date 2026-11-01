@@ -28,13 +28,13 @@
     </div>
 </div>
 
-<div id="worker-section" class="hidden mb-3 bg-green-50 border border-green-300 text-sm px-4 py-2 rounded-lg items-center gap-4">
-    <span id="worker-section-info" class="flex items-center gap-4 flex-wrap">
+<div id="worker-section" class="{{ $errors->has('worker_code') ? 'flex bg-red-50 border-red-300' : 'hidden bg-green-50 border-green-300' }} mb-3 border text-sm px-4 py-2 rounded-lg items-center gap-4">
+    <span id="worker-section-info" class="{{ $errors->has('worker_code') ? 'hidden' : 'flex' }} items-center gap-4 flex-wrap">
         <span><strong>{{ __('Worker') }}:</strong> <span id="worker-section-name"></span></span>
         <span><strong>{{ __('Phone') }}:</strong> <span id="worker-section-phone"></span></span>
         <button type="button" id="worker-section-clear" class="btn btn-gray">{{ __('Clear') }}</button>
     </span>
-    <span id="worker-section-error" class="text-red-600 hidden"></span>
+    <span id="worker-section-error" class="text-red-600 {{ $errors->has('worker_code') ? '' : 'hidden' }}">@if($errors->has('worker_code')){{ $errors->first('worker_code') }}@endif</span>
 </div>
 
 <div id="warning-banner" class="hidden mb-3 bg-amber-50 border border-amber-300 text-amber-800 text-sm px-4 py-2 rounded-lg"></div>
@@ -69,18 +69,6 @@
                 <div>
                     <label class="text-sm text-gray-600">{{ __('Overall Discount %') }}</label><br>
                     <input type="number" step="0.01" id="overall-discount" value="{{ $order->discount_percent }}" class="border rounded px-3 py-2 w-24">
-                </div>
-                <div>
-                    {{-- 2026-11-01: worker code on the main billing screen (was
-                         modal-only, so cashiers never saw it). Typed here, it
-                         is copied into the payment modal on Complete Order
-                         and submitted with the sale; blank = no attribution
-                         (re-completes keep the existing one). Deliberately
-                         NOT prefilled from the order: a stale code for a
-                         since-deactivated worker would block a re-complete. --}}
-                    <label class="text-sm text-gray-600">{{ __('Worker Code (optional)') }}</label><br>
-                    <input type="text" id="worker-code-main" placeholder="{{ __('e.g. W-01') }}" class="border rounded px-3 py-2 w-28">
-                    @error('worker_code')<p class="text-red-600 text-sm">{{ $message }}</p>@enderror
                 </div>
             </div>
             <div class="text-right">
@@ -549,8 +537,6 @@ function clearSelectedWorker() {
     const section = document.getElementById('worker-section');
     section.classList.add('hidden');
     section.classList.remove('flex');
-    const mainCode = document.getElementById('worker-code-main');
-    if (mainCode) mainCode.value = '';
 }
 
 async function loadWorker() {
@@ -583,8 +569,6 @@ async function loadWorker() {
     document.getElementById('worker-section-phone').textContent = worker.phone || '\u2014';
     error.classList.add('hidden');
     info.classList.remove('hidden');
-    const mainCode = document.getElementById('worker-code-main');
-    if (mainCode) mainCode.value = worker.code;
 }
 
 document.getElementById('worker-lookup-btn').addEventListener('click', loadWorker);
@@ -614,8 +598,6 @@ document.getElementById('checkout-btn').addEventListener('click', () => {
         if (manual) manual.classList.add('hidden');
         if (selected) selected.classList.remove('hidden');
     } else {
-        const mainCode = document.getElementById('worker-code-main');
-        if (mainCode && modalCode) modalCode.value = mainCode.value;
         if (modalCode) modalCode.disabled = false;
         if (hiddenCode) hiddenCode.disabled = true;
         if (manual) manual.classList.remove('hidden');

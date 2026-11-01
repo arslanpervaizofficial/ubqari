@@ -48,7 +48,12 @@
             @error('email') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
         </div>
         <div class="flex items-end pb-2">
-            <label class="inline-flex items-center gap-2 text-sm text-gray-600"><input type="checkbox" name="is_active" value="1" @checked(old('is_active', $worker->is_active))> {{ __('Active') }}</label>
+            <label class="inline-flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                <input type="checkbox" name="is_active" value="1" @checked(old('is_active', $worker->is_active)) class="peer sr-only">
+                <span class="w-11 h-6 rounded-full bg-gray-300 peer-checked:bg-green-500 relative transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-5 after:h-5 after:bg-white after:rounded-full after:shadow after:transition-transform peer-checked:after:translate-x-5"></span>
+                <span class="hidden peer-checked:inline font-medium text-green-700">{{ __('Active') }}</span>
+                <span class="peer-checked:hidden text-gray-500">{{ __('Disabled') }}</span>
+            </label>
         </div>
     </div>
 
