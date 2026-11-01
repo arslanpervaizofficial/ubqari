@@ -23,14 +23,6 @@
             <input name="username" value="{{ old('username') }}" required data-label="Username" class="w-full border rounded px-3 py-2">
             @error('username') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
         </div>
-        {{-- 2026-11-01: staff code, typed at billing time to attribute
-             orders to this worker. Optional — leave blank if unused. --}}
-        <div>
-            <label class="block text-sm text-gray-600 mb-1">{{ __('Staff Code (optional)') }}</label>
-            <input name="code" value="{{ old('code') }}" maxlength="50" placeholder="e.g. W1" class="w-full border rounded px-3 py-2">
-            <p class="text-xs text-gray-500 mt-1">{{ __('Typed at billing time to show who made the sale. Must be unique.') }}</p>
-            @error('code') <p class="text-red-600 text-xs mt-1">{{ $message }}</p> @enderror
-        </div>
         <div>
             <label class="block text-sm text-gray-600 mb-1">{{ __('Email') }}</label>
             <input type="email" name="email" value="{{ old('email') }}" required data-label="Email" class="w-full border rounded px-3 py-2">

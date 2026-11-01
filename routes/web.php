@@ -17,6 +17,7 @@ use App\Http\Controllers\SupplierController;
 use App\Http\Controllers\StockReturnController;
 use App\Http\Controllers\TrashController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\WorkerController;
 use App\Http\Controllers\ReportExportController;
 use App\Http\Controllers\AccountingController;
 use App\Http\Controllers\AgingController;
@@ -310,6 +311,12 @@ Route::middleware('auth')->group(function () {
         Route::delete('cash-management/{cashParty}/transactions/{transaction}', [CashManagementController::class, 'destroyTransaction'])->name('cash-management.destroy-transaction');
 
         Route::resource('users', UserController::class)->except(['show']);
+        // 2026-11-01 (worker fix): workers are a separate entity from
+        // staff users — no login, no role, bill attribution only. The
+        // list is visible to every authenticated role; management is
+        // admin-only inside the controller.
+        Route::resource('workers', WorkerController::class)->except(['show']);
+        Route::post('workers/{worker}/toggle-active', [WorkerController::class, 'toggleActive'])->name('workers.toggle-active');
         Route::post('users/{user}/toggle-active', [UserController::class, 'toggleActive'])->name('users.toggle-active');
         Route::post('users/destroy-selected', [UserController::class, 'destroySelected'])->name('users.destroy-selected');
         Route::post('users/destroy-all', [UserController::class, 'destroyAll'])->name('users.destroy-all');

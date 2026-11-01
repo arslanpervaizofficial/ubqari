@@ -9,7 +9,7 @@ use App\Models\OrderPayment;
 use App\Models\Product;
 use App\Models\ProductBatch;
 use App\Models\StockMovement;
-use App\Models\User;
+use App\Models\Worker;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -558,21 +558,23 @@ class POSController extends Controller
             'worker_code' => ['nullable', 'string', 'max:50'],
         ]);
 
-        // 2026-11-01: resolve the typed code against ACTIVE users only.
-        // Matching is the desktop's rule — trim, then exact match — and
-        // the stored code (not the typed casing) is what lands on the
-        // order, so the bill always shows the registered code. On the
-        // default MySQL ci collation the lookup itself is
-        // case-insensitive, which is harmless here: the unique index
-        // on users.code is ci too, so two casings of one code can never
-        // coexist. An unknown code is a validation error naming the
-        // code, never a silent walk-in sale.
+        // 2026-11-01 (corrected): workers are NOT staff users. A worker
+        // has no login and no role — the code exists only to name who
+        // is responsible for a bill. So the typed code resolves against
+        // the workers table (active rows only), never against users.
+        // Matching rule — trim, then exact match — and the stored code
+        // (not the typed casing) is what lands on the order, so the bill
+        // always shows the registered code. On the default MySQL ci
+        // collation the lookup itself is case-insensitive, which is
+        // harmless here: the unique index on workers.code is ci too, so
+        // two casings of one code can never coexist. An unknown code is
+        // a validation error naming the code, never a silent walk-in sale.
         $worker = null;
         if (!empty($data['worker_code']) && trim($data['worker_code']) !== '') {
             $typedCode = trim($data['worker_code']);
-            $worker = User::where('code', $typedCode)->where('is_active', true)->first();
+            $worker = Worker::where('code', $typedCode)->where('is_active', true)->first();
             if (!$worker) {
-                return back()->withErrors(['worker_code' => "No active staff user found with code \"{$typedCode}\" — check the code and try again."]);
+                return back()->withErrors(['worker_code' => "No active worker found with code \"{$typedCode}\" — check the code and try again."]);
             }
         }
 

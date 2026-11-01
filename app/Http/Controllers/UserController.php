@@ -6,7 +6,6 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
-use Illuminate\Validation\Rule;
 
 class UserController extends Controller
 {
@@ -60,10 +59,6 @@ class UserController extends Controller
             'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'password' => ['required', 'string', 'min:10', 'confirmed'],
             'role' => ['required', 'in:admin,manager,cashier'],
-            // 2026-11-01: staff code, typed at billing time to attribute
-            // orders to this worker (see POSController::complete). Only
-            // active users resolve, and the code is unique shop-wide.
-            'code' => ['nullable', 'string', 'max:50', 'unique:users,code'],
         ]);
 
         $data['image'] = $this->handleImageUpload($request);
@@ -108,9 +103,6 @@ class UserController extends Controller
             'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'role' => ['required', 'in:admin,manager,cashier'],
             'password' => ['nullable', 'string', 'min:10', 'confirmed'],
-            // 2026-11-01: same staff code as store(), ignoring this
-            // user so an unchanged code never flags itself.
-            'code' => ['nullable', 'string', 'max:50', Rule::unique('users', 'code')->ignore($user->id)],
         ]);
 
         // H25: never demote the last active admin — there would be no one
