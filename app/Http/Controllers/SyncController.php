@@ -20,11 +20,13 @@ use App\Models\StockReturn;
 use App\Models\Supplier;
 use App\Models\SupplierPayment;
 use App\Models\SyncFlag;
+use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Throwable;
@@ -86,6 +88,19 @@ use Throwable;
  *    against the observers' own guards. The coordinator needs a
  *    decision (two-step create, or a manual post step) before
  *    desktop sales are treated as fully journalled.
+ *  - Users (2026-11-02): profile fields sync both ways. A push
+ *    with an unknown client_uuid links by email first (no
+ *    duplicate accounts for staff on both sides). A creation push
+ *    may carry `password`, applied with Hash::make only on create;
+ *    update pushes never carry it, so web passwords are never
+ *    overwritten by desktop profile edits. Web-created users pull
+ *    down without any password (the server holds only hashes) and
+ *    cannot sign in on the desktop until an admin sets one there.
+ *    User deletes are NOT pushed by the desktop in v1 (same rule
+ *    as workers): delete on both sides when a user must really go.
+ *    A server user delete does arrive as a pull delete, and a
+ *    desktop-deleted user whose server copy still lives will
+ *    re-pull — the standing hard-delete gap, documented in v1.
  *  - Product batches are NOT adjusted by sync: a pushed movement
  *    changes products.stock only. Batch remaining quantities are a
  *    server-side breakdown maintained by the web sale/receive paths;
@@ -269,6 +284,21 @@ class SyncController extends Controller
                     'product_client_uuid' => ['product_id', 'products'],
                 ],
                 'soft' => false,
+            ],
+            // 2026-11-02: staff users join the syncable tables
+            // (user asked for push + pull). Profile fields only:
+            // `image` is excluded (no file sync in v1 — the desktop
+            // keeps its own photo), and `password` is NOT a field
+            // at all: it is applied only on create, by the hook
+            // below applyChange, so an update push can never
+            // overwrite a password set on the website. User uses
+            // SoftDeletes, so soft => true: push deletes soft-delete
+            // and pull surfaces trashed rows as deletes.
+            'users' => [
+                'model' => User::class,
+                'fields' => ['name', 'username', 'email', 'phone', 'city', 'address', 'id_card_number', 'role', 'is_active'],
+                'fks' => [],
+                'soft' => true,
             ],
         ];
     }
@@ -529,6 +559,37 @@ class SyncController extends Controller
                 return;
             }
 
+            // Users email-link (user sync 2026-11-02): a push whose
+            // client_uuid the server has never seen is matched by
+            // email first. A match adopts the desktop UUID onto the
+            // existing web user (query-builder update: no observers,
+            // no timestamp touch), so the first sync after the web
+            // patch does not create a duplicate account for staff
+            // who already exist on both sides under the same email.
+            // Trashed matches are included: the existing-row path
+            // below restores them, like any other pushed row.
+            if ($table === 'users' && $existing === null && is_string($data['email'] ?? null) && $data['email'] !== '') {
+                $byEmail = User::withTrashed()->where('email', $data['email'])->first();
+                if ($byEmail !== null) {
+                    DB::table('users')->where('id', $byEmail->id)->update(['client_uuid' => $clientUuid]);
+                    $existing = $this->baseQuery($config)->where('client_uuid', $clientUuid)->first();
+                }
+            }
+
+            // Users validation (user sync 2026-11-02): identity and
+            // uniqueness are checked up front with clear messages
+            // instead of surfacing raw unique-index SQL errors to
+            // Sync Review. Uniqueness counts trashed rows too, so a
+            // deleted web user's email/username cannot be silently
+            // reused by a different pushed account.
+            if ($table === 'users') {
+                $userError = $this->validateUserPush($data, $existing);
+                if ($userError !== null) {
+                    $reject('validation_failed', $userError);
+                    return;
+                }
+            }
+
             // Stock movements are insert-only and decided purely by
             // payload: identical payload = idempotent ACK, different
             // payload = duplicate_movement. They are never updated,
@@ -573,6 +634,18 @@ class SyncController extends Controller
             }
 
             $attributes = $this->buildAttributes($config, $data, $resolved);
+
+            // Users password (user sync 2026-11-02): applied ONLY
+            // when this push creates the row. `password` is not a
+            // registry field, so on the update path it never reaches
+            // $attributes at all — a profile push can never
+            // overwrite a password set on the website. No minimum
+            // length is enforced here: the web form's min-10 rule
+            // is a form rule, and sync carries the shop's own
+            // desktop password (token-authenticated endpoint).
+            if ($table === 'users' && $existing === null && is_string($data['password'] ?? null) && $data['password'] !== '') {
+                $attributes['password'] = Hash::make($data['password']);
+            }
 
             if ($existing !== null) {
                 if ($this->isTrashed($existing)) {
@@ -674,6 +747,52 @@ class SyncController extends Controller
         }
 
         return $columns;
+    }
+
+    /** Users push validation (user sync 2026-11-02). Returns a
+     *  clear error string, or null when the row may proceed.
+     *  Mirrors the web UserController rules that matter for sync
+     *  (username alpha_dash, email format, role set) plus
+     *  uniqueness against every row including trashed ones. The
+     *  desktop enforces the same rules first; this is the server
+     *  side that keeps a bad row out of the users table with a
+     *  message Sync Review can actually show. */
+    private function validateUserPush(array $data, ?Model $existing): ?string
+    {
+        $name = $data['name'] ?? null;
+        if (!is_string($name) || trim($name) === '') {
+            return 'User name is required.';
+        }
+        $username = $data['username'] ?? null;
+        if (!is_string($username) || trim($username) === '') {
+            return 'Username is required.';
+        }
+        if (!preg_match('/^[A-Za-z0-9_-]+$/', $username)) {
+            return 'Username may only contain letters, numbers, _ and -.';
+        }
+        $email = $data['email'] ?? null;
+        if (!is_string($email) || trim($email) === '') {
+            return 'User email is required.';
+        }
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return 'User email is not valid.';
+        }
+        $role = $data['role'] ?? 'cashier';
+        if (!in_array($role, ['admin', 'manager', 'cashier'], true)) {
+            return 'User role must be admin, manager or cashier.';
+        }
+        if (array_key_exists('is_active', $data) && !is_bool($data['is_active']) && !is_numeric($data['is_active'])) {
+            return 'is_active must be true or false.';
+        }
+        $selfId = $existing?->id ?? 0;
+        if (User::withTrashed()->where('username', $username)->where('id', '!=', $selfId)->exists()) {
+            return 'Username is already taken.';
+        }
+        if (User::withTrashed()->where('email', $email)->where('id', '!=', $selfId)->exists()) {
+            return 'Email is already taken.';
+        }
+
+        return null;
     }
 
     /** Whitelisted scalar attributes only. Unknown keys (including
