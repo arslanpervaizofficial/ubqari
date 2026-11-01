@@ -11,13 +11,17 @@
 <div class="bg-white rounded-xl shadow-sm overflow-x-auto">
 <table class="w-full text-sm">
     <thead class="bg-gray-50 text-left"><tr>
-        <th class="p-3">{{ __('Name') }}</th><th class="p-3">{{ __('Worker Code') }}</th><th class="p-3">{{ __('Orders') }}</th><th class="p-3">{{ __('Status') }}</th><th class="p-3">{{ __('Actions') }}</th>
+        <th class="p-3">{{ __('Photo') }}</th><th class="p-3">{{ __('Name') }}</th><th class="p-3">{{ __('Worker Code') }}</th><th class="p-3">{{ __('Phone') }}</th><th class="p-3">{{ __('CNIC') }}</th><th class="p-3">{{ __('Email') }}</th><th class="p-3">{{ __('Orders') }}</th><th class="p-3">{{ __('Status') }}</th><th class="p-3">{{ __('Actions') }}</th>
     </tr></thead>
     <tbody>
     @forelse($workers as $w)
         <tr class="border-t {{ !$w->is_active ? 'opacity-60' : '' }}">
+            <td class="p-3"><img src="{{ $w->image_url }}" class="w-9 h-9 rounded-full object-cover"></td>
             <td class="p-3 font-medium">{{ $w->name }}</td>
             <td class="p-3">{{ $w->code }}</td>
+            <td class="p-3">{{ $w->phone ?? '—' }}</td>
+            <td class="p-3">{{ $w->cnic ?? '—' }}</td>
+            <td class="p-3">{{ $w->email ?? '—' }}</td>
             <td class="p-3">{{ $orderCounts[$w->code] ?? 0 }}</td>
             <td class="p-3">
                 <span class="px-2 py-1 rounded text-xs {{ $w->is_active ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600' }}">{{ $w->is_active ? __('Active') : __('Disabled') }}</span>
@@ -38,7 +42,7 @@
             </td>
         </tr>
     @empty
-        <tr class="border-t"><td class="p-3 text-gray-500" colspan="5">{{ __('No workers yet.') }}</td></tr>
+        <tr class="border-t"><td class="p-3 text-gray-500" colspan="9">{{ __('No workers yet.') }}</td></tr>
     @endforelse
     </tbody>
 </table>

@@ -20,9 +20,20 @@ class Worker extends Model
 {
     protected $fillable = [
         'name', 'code', 'is_active',
+        'phone', 'cnic', 'email', 'image',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
     ];
+
+    /** Photo URL, same pattern as Customer: uploaded photo, else a
+     *  generated placeholder avatar with the worker's initial. */
+    public function getImageUrlAttribute(): string
+    {
+        if ($this->image) {
+            return asset('uploads/workers/' . $this->image);
+        }
+        return 'https://ui-avatars.com/api/?name=' . urlencode($this->name) . '&background=1e293b&color=fff&size=128';
+    }
 }

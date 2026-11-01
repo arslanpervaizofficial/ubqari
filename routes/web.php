@@ -87,6 +87,7 @@ Route::middleware('auth')->group(function () {
         Route::get('/', [POSController::class, 'index'])->name('index');
         Route::get('/held', [POSController::class, 'heldIndex'])->name('held-index');
         Route::get('/held/{order}', [POSController::class, 'showHeld'])->name('held-detail');
+        Route::get('/worker-lookup', [POSController::class, 'lookupWorker'])->name('worker-lookup');
         Route::post('/new', [POSController::class, 'newOrder'])->name('new');
         Route::post('/resume/{order}', [POSController::class, 'resume'])->name('resume');
         Route::post('/add-item', [POSController::class, 'addItem'])->name('add-item');

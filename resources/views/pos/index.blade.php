@@ -17,11 +17,24 @@
             <button class="btn btn-gray">{{ __('Load Order') }}</button>
         </form>
         @endif
+        <div class="flex items-center gap-1">
+            <input type="text" id="worker-lookup-code" placeholder="{{ __('Worker code') }}" class="border rounded px-3 py-2 text-sm w-32">
+            <button type="button" id="worker-lookup-btn" class="btn btn-gray">{{ __('Load Worker') }}</button>
+        </div>
         <form method="POST" action="{{ route('pos.new') }}" class="inline confirm-submit" data-confirm-message="{{ __('Start a new order? Current one will be held automatically if it has items.') }}">
             @csrf
             <button class="btn btn-solid-blue">+ {{ __('New Order') }}</button>
         </form>
     </div>
+</div>
+
+<div id="worker-section" class="hidden mb-3 bg-green-50 border border-green-300 text-sm px-4 py-2 rounded-lg items-center gap-4">
+    <span id="worker-section-info" class="flex items-center gap-4 flex-wrap">
+        <span><strong>{{ __('Worker') }}:</strong> <span id="worker-section-name"></span></span>
+        <span><strong>{{ __('Phone') }}:</strong> <span id="worker-section-phone"></span></span>
+        <button type="button" id="worker-section-clear" class="btn btn-gray">{{ __('Clear') }}</button>
+    </span>
+    <span id="worker-section-error" class="text-red-600 hidden"></span>
 </div>
 
 <div id="warning-banner" class="hidden mb-3 bg-amber-50 border border-amber-300 text-amber-800 text-sm px-4 py-2 rounded-lg"></div>
@@ -56,6 +69,18 @@
                 <div>
                     <label class="text-sm text-gray-600">{{ __('Overall Discount %') }}</label><br>
                     <input type="number" step="0.01" id="overall-discount" value="{{ $order->discount_percent }}" class="border rounded px-3 py-2 w-24">
+                </div>
+                <div>
+                    {{-- 2026-11-01: worker code on the main billing screen (was
+                         modal-only, so cashiers never saw it). Typed here, it
+                         is copied into the payment modal on Complete Order
+                         and submitted with the sale; blank = no attribution
+                         (re-completes keep the existing one). Deliberately
+                         NOT prefilled from the order: a stale code for a
+                         since-deactivated worker would block a re-complete. --}}
+                    <label class="text-sm text-gray-600">{{ __('Worker Code (optional)') }}</label><br>
+                    <input type="text" id="worker-code-main" placeholder="{{ __('e.g. W-01') }}" class="border rounded px-3 py-2 w-28">
+                    @error('worker_code')<p class="text-red-600 text-sm">{{ $message }}</p>@enderror
                 </div>
             </div>
             <div class="text-right">
@@ -142,9 +167,17 @@
                  code is rejected by POSController::complete with the code
                  named in the error. On a re-completed order the field is
                  blank by design and the existing attribution is kept. --}}
+            <div id="worker-modal-manual">
             <label class="block text-sm mb-1">{{ __('Worker Code (optional)') }}</label>
-            <input name="worker_code" placeholder="{{ __('e.g. W-01 — leave blank if not needed') }}" class="w-full border rounded px-3 py-2 mb-1">
+            <input name="worker_code" id="worker-code-modal" placeholder="{{ __('e.g. W-01 — leave blank if not needed') }}" class="w-full border rounded px-3 py-2 mb-1">
             @error('worker_code')<p class="text-red-600 text-sm mb-3">{{ $message }}</p>@enderror
+            </div>
+            <div id="worker-modal-selected" class="hidden">
+                <label class="block text-sm mb-1">{{ __('Worker') }}</label>
+                <input type="text" id="worker-modal-name" disabled class="w-full border rounded px-3 py-2 mb-1 bg-gray-100">
+                <input type="hidden" name="worker_code" id="worker-modal-code-hidden" disabled>
+                <p class="text-xs text-gray-500 mb-3">{{ __('Loaded from the top bar — locked, cannot be changed here. Clear it from the worker section above to pick another.') }}</p>
+            </div>
 
             <div class="flex justify-end gap-2">
                 <button type="button" id="cancel-checkout" class="btn btn-gray">{{ __('Cancel') }}</button>
@@ -505,8 +538,89 @@ document.getElementById('overall-discount').addEventListener('change', async fun
     renderOrder(data.order);
 });
 
+// Worker loaded from the top bar (null = none loaded). When set, the
+// payment modal shows the worker NAME locked (disabled) instead of an
+// editable code box, and submits the code through a hidden input —
+// exactly what the shop asked for: no editing at payment time.
+let selectedWorker = null;
+
+function clearSelectedWorker() {
+    selectedWorker = null;
+    const section = document.getElementById('worker-section');
+    section.classList.add('hidden');
+    section.classList.remove('flex');
+    const mainCode = document.getElementById('worker-code-main');
+    if (mainCode) mainCode.value = '';
+}
+
+async function loadWorker() {
+    const codeInput = document.getElementById('worker-lookup-code');
+    const code = codeInput.value.trim();
+    const section = document.getElementById('worker-section');
+    const info = document.getElementById('worker-section-info');
+    const error = document.getElementById('worker-section-error');
+    section.classList.remove('hidden');
+    section.classList.add('flex');
+    if (!code) {
+        selectedWorker = null;
+        info.classList.add('hidden');
+        error.textContent = '{{ __('Type a worker code first.') }}';
+        error.classList.remove('hidden');
+        return;
+    }
+    const res = await fetch(`{{ route('pos.worker-lookup') }}?code=${encodeURIComponent(code)}`, { headers: { 'Accept': 'application/json' } });
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        selectedWorker = null;
+        info.classList.add('hidden');
+        error.textContent = data.message || '{{ __('Worker not found.') }}';
+        error.classList.remove('hidden');
+        return;
+    }
+    const worker = await res.json();
+    selectedWorker = worker;
+    document.getElementById('worker-section-name').textContent = worker.name;
+    document.getElementById('worker-section-phone').textContent = worker.phone || '\u2014';
+    error.classList.add('hidden');
+    info.classList.remove('hidden');
+    const mainCode = document.getElementById('worker-code-main');
+    if (mainCode) mainCode.value = worker.code;
+}
+
+document.getElementById('worker-lookup-btn').addEventListener('click', loadWorker);
+document.getElementById('worker-lookup-code').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); loadWorker(); }
+});
+document.getElementById('worker-lookup-code').addEventListener('input', (e) => {
+    // Editing the code after a load invalidates the loaded worker.
+    if (selectedWorker && e.target.value.trim() !== selectedWorker.code) clearSelectedWorker();
+});
+document.getElementById('worker-section-clear').addEventListener('click', () => {
+    document.getElementById('worker-lookup-code').value = '';
+    clearSelectedWorker();
+});
+
 document.getElementById('checkout-btn').addEventListener('click', () => {
     document.getElementById('checkout-modal').classList.remove('hidden');
+    const manual = document.getElementById('worker-modal-manual');
+    const selected = document.getElementById('worker-modal-selected');
+    const modalCode = document.getElementById('worker-code-modal');
+    const hiddenCode = document.getElementById('worker-modal-code-hidden');
+    const modalName = document.getElementById('worker-modal-name');
+    if (selectedWorker) {
+        if (modalName) modalName.value = selectedWorker.name;
+        if (hiddenCode) { hiddenCode.value = selectedWorker.code; hiddenCode.disabled = false; }
+        if (modalCode) modalCode.disabled = true;
+        if (manual) manual.classList.add('hidden');
+        if (selected) selected.classList.remove('hidden');
+    } else {
+        const mainCode = document.getElementById('worker-code-main');
+        if (mainCode && modalCode) modalCode.value = mainCode.value;
+        if (modalCode) modalCode.disabled = false;
+        if (hiddenCode) hiddenCode.disabled = true;
+        if (manual) manual.classList.remove('hidden');
+        if (selected) selected.classList.add('hidden');
+    }
 });
 document.getElementById('cancel-checkout').addEventListener('click', () => {
     document.getElementById('checkout-modal').classList.add('hidden');

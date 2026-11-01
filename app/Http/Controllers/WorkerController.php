@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Order;
 use App\Models\Worker;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 
 /** Workers — bill attribution only (see Worker model).
  *
@@ -36,11 +37,10 @@ class WorkerController extends Controller
     public function store(Request $request)
     {
         $this->requireAdmin();
-        $data = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'code' => ['required', 'string', 'max:50', 'unique:workers,code'],
-        ]);
+        $request->merge(['phone' => self::normalisePhone($request->input('phone'))]);
+        $data = $request->validate($this->rules());
         $data['is_active'] = $request->boolean('is_active');
+        $data['image'] = $this->handleImageUpload($request);
         Worker::create($data);
         return redirect()->route('workers.index')->with('success', __('Worker added.'));
     }
@@ -54,11 +54,10 @@ class WorkerController extends Controller
     public function update(Request $request, Worker $worker)
     {
         $this->requireAdmin();
-        $data = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'code' => ['required', 'string', 'max:50', 'unique:workers,code,' . $worker->id],
-        ]);
+        $request->merge(['phone' => self::normalisePhone($request->input('phone'))]);
+        $data = $request->validate($this->rules($worker->id));
         $data['is_active'] = $request->boolean('is_active');
+        $data['image'] = $this->handleImageUpload($request, $worker);
         $worker->update($data);
         return redirect()->route('workers.index')->with('success', __('Worker updated.'));
     }
@@ -67,6 +66,13 @@ class WorkerController extends Controller
     {
         $this->requireAdmin();
         // Safe: orders keep worker_code/worker_name as plain text.
+        // The photo is worker-only data, so it goes with the worker.
+        if ($worker->image) {
+            $path = public_path('uploads/workers/' . $worker->image);
+            if (file_exists($path)) {
+                @unlink($path);
+            }
+        }
         $worker->delete();
         return redirect()->route('workers.index')->with('success', __('Worker deleted.'));
     }
@@ -76,6 +82,58 @@ class WorkerController extends Controller
         $this->requireAdmin();
         $worker->update(['is_active' => !$worker->is_active]);
         return back()->with('success', __('Worker status updated.'));
+    }
+
+    /** $id excludes the record being edited from the uniqueness
+     *  checks, so updating a worker without changing its own code,
+     *  CNIC or email doesn't flag itself as a duplicate. Phone is
+     *  normalised to digits only before this runs (see store/update),
+     *  so "0300-123 4567" and "03001234567" are the same number. */
+    private function rules($id = null): array
+    {
+        $ignore = $id ? ',' . $id : '';
+        return [
+            'name' => ['required', 'string', 'max:255'],
+            'code' => ['required', 'string', 'max:50', 'unique:workers,code' . $ignore],
+            'phone' => ['required', 'string', 'regex:/^[0-9]{7,15}$/'],
+            'cnic' => ['required', 'string', 'regex:/^\d{5}-\d{7}-\d{1}$/', 'unique:workers,cnic' . $ignore],
+            'email' => ['nullable', 'email', 'max:255', 'unique:workers,email' . $ignore],
+            'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+        ];
+    }
+
+    private static function normalisePhone($phone): string
+    {
+        if (!is_string($phone)) {
+            return '';
+        }
+        return preg_replace('/[^0-9]/', '', $phone) ?? '';
+    }
+
+    /** Photo upload, same pattern as CustomerController: public
+     *  uploads/workers, random filename, extension detected from the
+     *  file's actual MIME type (never the client-supplied one), old
+     *  photo deleted on replace. No file -> keep the current photo. */
+    private function handleImageUpload(Request $request, Worker $worker = null): ?string
+    {
+        if (!$request->hasFile('image')) {
+            return $worker->image ?? null;
+        }
+
+        $dir = public_path('uploads/workers');
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+
+        if ($worker && $worker->image && file_exists($dir . '/' . $worker->image)) {
+            @unlink($dir . '/' . $worker->image);
+        }
+
+        $file = $request->file('image');
+        $filename = Str::random(20) . '.' . $file->extension();
+        $file->move($dir, $filename);
+
+        return $filename;
     }
 
     private function requireAdmin(): void

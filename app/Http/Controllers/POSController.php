@@ -931,6 +931,27 @@ class POSController extends Controller
         return redirect()->route('pos.index')->with('status', 'Order duplicated into new cart.');
     }
 
+    /** Worker lookup for the POS top bar: typed code -> name + phone
+     *  as JSON, so the cashier sees who they just loaded before billing.
+     *  Active workers only, matching complete(): an inactive worker can
+     *  never be assigned, so it is not returned here either. */
+    public function lookupWorker(Request $request)
+    {
+        $code = trim((string) $request->query('code', ''));
+        if ($code === '') {
+            return response()->json(['message' => __('Worker code is required.')], 422);
+        }
+        $worker = Worker::where('code', $code)->where('is_active', true)->first();
+        if (!$worker) {
+            return response()->json(['message' => __('No active worker found with this code.')], 404);
+        }
+        return response()->json([
+            'code' => $worker->code,
+            'name' => $worker->name,
+            'phone' => $worker->phone,
+        ]);
+    }
+
     public function productSearch(Request $request)
     {
         $q = $request->input('q', '');
