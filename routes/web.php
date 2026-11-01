@@ -316,7 +316,7 @@ Route::middleware('auth')->group(function () {
         // staff users — no login, no role, bill attribution only. The
         // list is visible to every authenticated role; management is
         // admin-only inside the controller.
-        Route::resource('workers', WorkerController::class)->except(['show']);
+        Route::resource('workers', WorkerController::class);
         Route::post('workers/{worker}/toggle-active', [WorkerController::class, 'toggleActive'])->name('workers.toggle-active');
         Route::post('users/{user}/toggle-active', [UserController::class, 'toggleActive'])->name('users.toggle-active');
         Route::post('users/destroy-selected', [UserController::class, 'destroySelected'])->name('users.destroy-selected');

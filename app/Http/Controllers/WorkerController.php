@@ -28,6 +28,19 @@ class WorkerController extends Controller
         return view('workers.index', compact('workers', 'orderCounts'));
     }
 
+    public function show(Worker $worker)
+    {
+        // Visible to every authenticated role, like the list: any role
+        // may need to check who a worker is. Management stays admin-only.
+        // Stats follow the CURRENT code: orders keep code + name as
+        // plain text, so a code changed later leaves old orders behind.
+        $base = Order::where('worker_code', $worker->code);
+        $orders = (clone $base)->latest()->take(10)->get();
+        $ordersCount = (clone $base)->count();
+        $totalBilled = (clone $base)->sum('total');
+        return view('workers.show', compact('worker', 'orders', 'ordersCount', 'totalBilled'));
+    }
+
     public function create()
     {
         $this->requireAdmin();
