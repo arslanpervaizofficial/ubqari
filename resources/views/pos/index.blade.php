@@ -64,10 +64,10 @@
                 <div class="text-sm">{{ __('Overall Discount: -') }}<span id="discount">{{ number_format($order->discount_amount, 2) }}</span></div>
                 <div class="text-xl font-bold mt-1">{{ __('Total Bill Payment') }}: <span id="total">{{ number_format($order->total, 2) }}</span></div>
                 <div class="text-sm mt-1 {{ $order->customer ? '' : 'hidden' }}" id="due-payment-row">
-                    {{ __('Due Payment (previous balance)') }}: <span id="due-payment" class="{{ ($order->customer->recomputed_balance ?? $order->customer->credit_balance ?? 0) > 0 ? 'text-red-600 font-medium' : (($order->customer->recomputed_balance ?? $order->customer->credit_balance ?? 0) < 0 ? 'text-blue-700 font-medium' : '') }}">{{ number_format($order->customer->recomputed_balance ?? $order->customer->credit_balance ?? 0, 2) }}</span>
+                    {{ __('Due Payment (previous balance)') }}: <span id="due-payment" class="{{ ($order->customer->credit_balance ?? 0) > 0 ? 'text-red-600 font-medium' : (($order->customer->credit_balance ?? 0) < 0 ? 'text-blue-700 font-medium' : '') }}">{{ number_format($order->customer->credit_balance ?? 0, 2) }}</span>
                 </div>
                 <div class="text-lg font-bold mt-1 {{ $order->customer ? '' : 'hidden' }}" id="total-with-due-row">
-                    {{ __('Total Payment with Due') }}: <span id="total-with-due">{{ number_format($order->total + ($order->customer->recomputed_balance ?? $order->customer->credit_balance ?? 0), 2) }}</span>
+                    {{ __('Total Payment with Due') }}: <span id="total-with-due">{{ number_format($order->total + ($order->customer->credit_balance ?? 0), 2) }}</span>
                 </div>
             </div>
         </div>
@@ -136,6 +136,15 @@
                 <label class="block text-sm mb-1">{{ __('Transaction ID') }}</label>
                 <input name="transaction_id" placeholder="{{ __('e.g. TXN123456') }}" class="w-full border rounded px-3 py-2 mb-3">
             </div>
+
+            {{-- 2026-11-01: optional staff code attributing this sale to a
+                 worker. Leave blank for a normal cashier sale; an unknown
+                 code is rejected by POSController::complete with the code
+                 named in the error. On a re-completed order the field is
+                 blank by design and the existing attribution is kept. --}}
+            <label class="block text-sm mb-1">{{ __('Worker Code (optional)') }}</label>
+            <input name="worker_code" placeholder="{{ __('e.g. W-01 — leave blank if not needed') }}" class="w-full border rounded px-3 py-2 mb-1">
+            @error('worker_code')<p class="text-red-600 text-sm mb-3">{{ $message }}</p>@enderror
 
             <div class="flex justify-end gap-2">
                 <button type="button" id="cancel-checkout" class="btn btn-gray">{{ __('Cancel') }}</button>
@@ -228,7 +237,7 @@ function renderOrder(order) {
     const dueRow = document.getElementById('due-payment-row');
     const totalWithDueRow = document.getElementById('total-with-due-row');
     if (order.customer) {
-        const due = Number(order.customer.recomputed_balance ?? order.customer.credit_balance);
+        const due = Number(order.customer.credit_balance);
         const dueEl = document.getElementById('due-payment');
         dueEl.textContent = due.toFixed(2);
         dueEl.className = due > 0 ? 'text-red-600 font-medium' : (due < 0 ? 'text-blue-700 font-medium' : '');

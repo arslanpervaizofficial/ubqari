@@ -24,6 +24,12 @@ class Order extends Model
         // (H23-part); columns are created by the migration package.
         'cash_amount', 'bank_amount',
         'original_completed_at',
+        // 2026-11-01: worker attribution — plain text, not money or
+        // status, so fillable is safe. POSController::complete() still
+        // writes them via forceFill() (same as the other completion
+        // fields); the fillable entry is what lets a sync push carry
+        // them through SyncController's whitelisted field list.
+        'worker_code', 'worker_name',
     ];
 
     protected $casts = ['original_completed_at' => 'datetime'];

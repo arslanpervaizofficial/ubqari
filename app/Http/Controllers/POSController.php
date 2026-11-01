@@ -9,6 +9,7 @@ use App\Models\OrderPayment;
 use App\Models\Product;
 use App\Models\ProductBatch;
 use App\Models\StockMovement;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -63,7 +64,6 @@ class POSController extends Controller
     {
         $order = $this->getOrCreateCurrentOrder($request);
         $order->load('items.product', 'customer');
-        $this->withRecomputedBalance($order);
 
         $heldOrders = Order::where('status', 'hold')
             ->where('user_id', auth()->id())
@@ -75,20 +75,6 @@ class POSController extends Controller
         $customers = Customer::where('is_active', true)->orderBy('name')->get();
 
         return view('pos.index', compact('order', 'heldOrders', 'customers'));
-    }
-
-    /** v3.2.5: attach the recomputed ledger balance to the order's
-     *  customer as a runtime attribute (never saved), so the billing
-     *  page, its JSON responses and the invoice show ledgerFigures(),
-     *  not the stored credit_balance column. The blade/JS read
-     *  recomputed_balance ?? credit_balance, so any render path that
-     *  forgets to attach it falls back to the stored value. */
-    private function withRecomputedBalance(Order $order): Order
-    {
-        if ($order->customer) {
-            $order->customer->recomputed_balance = $order->customer->recomputedBalance();
-        }
-        return $order;
     }
 
     /** "Previous order id" field on the billing screen — loads a completed
@@ -323,7 +309,7 @@ class POSController extends Controller
 
         return response()->json([
             'success' => true,
-            'order' => $this->withRecomputedBalance($order->fresh('items.product', 'customer')),
+            'order' => $order->fresh('items.product', 'customer'),
             'available_stock' => $this->availableStock($product),
             'warning' => $warning,
         ]);
@@ -338,7 +324,7 @@ class POSController extends Controller
         $item->delete();
         $this->recalculateTotals($order);
 
-        return response()->json(['success' => true, 'order' => $this->withRecomputedBalance($order->fresh('items.product', 'customer'))]);
+        return response()->json(['success' => true, 'order' => $order->fresh('items.product', 'customer')]);
     }
 
     public function updateItemQuantity(Request $request, OrderItem $item)
@@ -382,7 +368,7 @@ class POSController extends Controller
 
         return response()->json([
             'success' => true,
-            'order' => $this->withRecomputedBalance($item->order->fresh('items.product', 'customer')),
+            'order' => $item->order->fresh('items.product', 'customer'),
             'warning' => $warning,
         ]);
     }
@@ -415,7 +401,7 @@ class POSController extends Controller
 
         return response()->json([
             'success' => true,
-            'order' => $this->withRecomputedBalance($item->order->fresh('items.product', 'customer')),
+            'order' => $item->order->fresh('items.product', 'customer'),
             'warning' => $exceedsMax
                 ? "{$item->product->name}: discount {$data['discount_percent']}% exceeds max allowed ({$item->product->max_discount_percent}%). Applied anyway — adjust if needed."
                 : null,
@@ -442,7 +428,7 @@ class POSController extends Controller
         $order->save();
         $this->recalculateTotals($order);
 
-        return response()->json(['success' => true, 'order' => $this->withRecomputedBalance($order->fresh('items.product', 'customer'))]);
+        return response()->json(['success' => true, 'order' => $order->fresh('items.product', 'customer')]);
     }
 
     public function setCustomer(Request $request)
@@ -479,7 +465,7 @@ class POSController extends Controller
         $order->save();
         $this->recalculateTotals($order);
 
-        return response()->json(['success' => true, 'order' => $this->withRecomputedBalance($order->fresh('items.product', 'customer'))]);
+        return response()->json(['success' => true, 'order' => $order->fresh('items.product', 'customer')]);
     }
 
     private function availableStock(Product $product): float
@@ -565,7 +551,30 @@ class POSController extends Controller
             'paid_amount' => ['nullable', 'numeric', 'min:0'],
             'bank_name' => ['required_if:payment_method,bank,split', 'nullable', 'string', 'max:255'],
             'transaction_id' => ['required_if:payment_method,bank,split', 'nullable', 'string', 'max:255'],
+            // 2026-11-01: optional staff code attributing this sale to
+            // a worker. Accepted here so the endpoint (and a future
+            // checkout-form field) can carry it; desktop bills already
+            // push worker_code/worker_name through the sync field list.
+            'worker_code' => ['nullable', 'string', 'max:50'],
         ]);
+
+        // 2026-11-01: resolve the typed code against ACTIVE users only.
+        // Matching is the desktop's rule — trim, then exact match — and
+        // the stored code (not the typed casing) is what lands on the
+        // order, so the bill always shows the registered code. On the
+        // default MySQL ci collation the lookup itself is
+        // case-insensitive, which is harmless here: the unique index
+        // on users.code is ci too, so two casings of one code can never
+        // coexist. An unknown code is a validation error naming the
+        // code, never a silent walk-in sale.
+        $worker = null;
+        if (!empty($data['worker_code']) && trim($data['worker_code']) !== '') {
+            $typedCode = trim($data['worker_code']);
+            $worker = User::where('code', $typedCode)->where('is_active', true)->first();
+            if (!$worker) {
+                return back()->withErrors(['worker_code' => "No active staff user found with code \"{$typedCode}\" — check the code and try again."]);
+            }
+        }
 
         if ($order->items()->count() === 0) {
             return back()->withErrors(['error' => 'Cannot complete an empty order.']);
@@ -581,7 +590,7 @@ class POSController extends Controller
         // order are collected here and flashed separately below. The check
         // itself must never throw, so it is wrapped in try/catch.
         $expiredSaleWarnings = [];
-        DB::transaction(function () use ($order, $data, $hasPayments, &$expiredSaleWarnings) {
+        DB::transaction(function () use ($order, $data, $hasPayments, &$expiredSaleWarnings, $worker) {
             // Lock the order row first and re-check status inside the
             // transaction (C1): without this, two concurrent completes
             // could both pass the pre-transaction status check.
@@ -720,7 +729,7 @@ class POSController extends Controller
 
             // v3.1.0 (L4): status/paid_amount/due_amount are no longer
             // fillable — the whole completion write goes via forceFill().
-            $locked->forceFill([
+            $completion = [
                 'status' => 'completed',
                 // A held/draft order that gets completed and paid for is a
                 // real sale now, not a quotation/estimate anymore — reset
@@ -742,7 +751,18 @@ class POSController extends Controller
                 // again — even when this same order is later reopened and
                 // re-completed through the "load order to edit" flow.
                 'original_completed_at' => $locked->original_completed_at ?? now(),
-            ])->save();
+            ];
+            // 2026-11-01: worker attribution is written ONLY when a code
+            // was resolved on this completion. A fresh sale without a
+            // code keeps the columns' NULL default; a re-completed order
+            // without a code keeps whatever attribution it already had
+            // instead of being silently wiped by the edit flow (whose
+            // checkout form carries no worker field yet).
+            if ($worker) {
+                $completion['worker_code'] = $worker->code;
+                $completion['worker_name'] = $worker->name;
+            }
+            $locked->forceFill($completion)->save();
 
             if ($locked->customer_id && abs($due) > 0.004) {
                 $locked->customer()->increment('credit_balance', $due);
@@ -826,7 +846,6 @@ class POSController extends Controller
         // invoice (including customer details) by id.
         $this->assertPosOrderAccess($order, $request);
         $order->load('items.product', 'customer', 'cashier');
-        $this->withRecomputedBalance($order);
         return view('pos.invoice', compact('order'));
     }
 

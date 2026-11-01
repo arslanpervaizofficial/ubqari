@@ -14,9 +14,13 @@ class User extends Authenticatable
     // never be mass-assignable from request data. Call sites now use
     // forceFill() (UserController store/update/toggleActive,
     // ProfileController password change, DatabaseSeeder).
+    // 2026-11-01: code added — a staff code is ordinary admin-entered
+    // data (like username), not a credential or a privilege, so it
+    // stays fillable; store/update still go through forceFill() with
+    // validated data, same as the other fields here.
     protected $fillable = [
         'name', 'username', 'email', 'phone', 'city', 'address',
-        'id_card_number', 'image',
+        'id_card_number', 'image', 'code',
     ];
     protected $hidden = ['password', 'remember_token'];
 

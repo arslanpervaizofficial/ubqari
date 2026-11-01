@@ -32,6 +32,15 @@
     @endif
 
     <p class="mb-2 text-sm">{{ __('Customer') }}: {{ $order->customer->name ?? 'Walk-in' }}</p>
+    {{-- 2026-11-01: party code of the billed customer, and the worker
+         the sale is attributed to (denormalized on the order, so it
+         survives a later rename of the staff user). --}}
+    @if($order->customer && $order->customer->party_code)
+    <p class="mb-2 text-sm">{{ __('Party Code') }}: {{ $order->customer->party_code }}</p>
+    @endif
+    @if($order->worker_name)
+    <p class="mb-2 text-sm">{{ __('Billed by') }}: {{ $order->worker_name }}@if($order->worker_code) ({{ $order->worker_code }})@endif</p>
+    @endif
 
     <table class="w-full text-sm mb-4">
         <thead class="border-b text-left"><tr><th class="py-1">#</th><th>{{ __('Item') }}</th><th>{{ __('Qty') }}</th><th>{{ __('Price') }}</th><th>{{ __('Total') }}</th></tr></thead>
@@ -61,13 +70,10 @@
         @endif
         <div>{{ $order->due_amount < 0 ? __('Advance (this order)') : __('Due (this order)') }}: {{ number_format($order->due_amount, 2) }}</div>
         @php
-            // v3.2.5: the recomputed ledger balance (ledgerFigures)
-            // already has THIS order's (signed) due_amount folded into
-            // it — this is a completed order, so it counts — so
-            // subtracting it back out isolates what was owed (or held
-            // in advance) beforehand. Same arithmetic as before, just
-            // drift-free: the stored column is only a reconciled cache.
-            $balanceNow = $order->customer ? (float) ($order->customer->recomputed_balance ?? $order->customer->credit_balance) : 0;
+            // customer->credit_balance already has THIS order's (signed)
+            // due_amount folded into it, so subtracting it back out
+            // isolates what was owed (or held in advance) beforehand.
+            $balanceNow = $order->customer ? (float) $order->customer->credit_balance : 0;
             $previousBal = $order->customer ? round($balanceNow - $order->due_amount, 2) : 0;
         @endphp
         @if($order->customer && abs($previousBal) > 0.004)
@@ -119,6 +125,8 @@
         <div class="hr"></div>
         <div>{{ __('Order #') }}: {{ $order->order_number }}</div>
         <div>{{ __('Customer') }}: {{ $order->customer->name ?? 'Walk-in' }}</div>
+        @if($order->customer && $order->customer->party_code)<div>{{ __('Party Code') }}: {{ $order->customer->party_code }}</div>@endif
+        @if($order->worker_name)<div>{{ __('Billed by') }}: {{ $order->worker_name }}@if($order->worker_code) ({{ $order->worker_code }})@endif</div>@endif
         <div>{{ __('Cashier') }}: {{ $order->cashier->name ?? '—' }}</div>
         <div class="hr"></div>
         @foreach($order->items as $item)

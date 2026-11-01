@@ -49,4 +49,15 @@
         <label class="block text-sm text-gray-600 mb-1">{{ __('Permanent Address') }}</label>
         <input name="permanent_address" value="{{ old('permanent_address', $c->permanent_address ?? '') }}" class="w-full border rounded px-3 py-2">
     </div>
+    {{-- 2026-11-01: Party Code is system-assigned, never typed here.
+         Existing customers show their code; a new customer gets one
+         automatically on save (format P-0001). --}}
+    <div>
+        <label class="block text-sm text-gray-600 mb-1">{{ __('Party Code') }}</label>
+        @if($c && $c->party_code)
+            <input value="{{ $c->party_code }}" readonly class="w-full border rounded px-3 py-2 bg-gray-50">
+        @else
+            <p class="text-sm text-gray-500 py-2">{{ __('Assigned automatically on save (format P-0001).') }}</p>
+        @endif
+    </div>
 </div>
