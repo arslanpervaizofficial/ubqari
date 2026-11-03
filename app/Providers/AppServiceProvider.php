@@ -9,9 +9,14 @@ use App\Models\Customer;
 use App\Models\CustomerPayment;
 use App\Models\Expense;
 use App\Models\Order;
+use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\ProductBatch;
 use App\Models\PurchaseOrder;
+use App\Models\PurchaseOrderItem;
+use App\Models\StockCount;
+use App\Models\StockCountItem;
+use App\Models\StockMovement;
 use App\Models\StockReturn;
 use App\Models\Supplier;
 use App\Models\SupplierPayment;
@@ -21,7 +26,9 @@ use Illuminate\Auth\Events\Logout;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Str;
 
 /**
  * Ubqari POS v3.0 — FEATURE 4 (Audit Log).
@@ -186,6 +193,57 @@ class AppServiceProvider extends ServiceProvider
             CustomerPayment::class,
         ] as $class) {
             $observe($class);
+        }
+
+        // 2026-11-03 SYNC FIX: every web-created syncable row must
+        // carry a client_uuid, or server pull (which filters
+        // whereNotNull('client_uuid')) can never deliver it to the
+        // desktop. Migration 000001 backfilled only the rows that
+        // existed at migration time; everything created on the web
+        // after that had NULL and stayed invisible to pull forever
+        // (this is why November web sales never reached the
+        // desktop while the desktop's own rows synced fine).
+        // This hook fills the uuid at creation for every syncable
+        // model. It NEVER overwrites a uuid that is already set
+        // (desktop push supplies its own uuid via forceFill, and
+        // that value must survive), and it skips a table whose
+        // column does not exist yet (checked once per table per
+        // request, so a missing column can never break creation).
+        // No console/auth guard here on purpose, unlike the audit
+        // wiring above: seeders and console-created rows must also
+        // get a uuid, or they would be invisible to pull too.
+        $uuidTables = [];
+        $fillUuid = function (Model $model) use (&$uuidTables): void {
+            $table = $model->getTable();
+            if (!array_key_exists($table, $uuidTables)) {
+                $uuidTables[$table] = Schema::hasColumn($table, 'client_uuid');
+            }
+            if ($uuidTables[$table] && empty($model->client_uuid)) {
+                $model->client_uuid = (string) Str::uuid();
+            }
+        };
+
+        foreach ([
+            Product::class,
+            ProductBatch::class,
+            Customer::class,
+            Supplier::class,
+            PurchaseOrder::class,
+            PurchaseOrderItem::class,
+            Order::class,
+            OrderItem::class,
+            StockMovement::class,
+            StockReturn::class,
+            Expense::class,
+            CashParty::class,
+            CashTransaction::class,
+            User::class,
+            SupplierPayment::class,
+            CustomerPayment::class,
+            StockCount::class,
+            StockCountItem::class,
+        ] as $class) {
+            $class::creating($fillUuid);
         }
 
         // Auth events — ALWAYS logged, exempt from the console /
