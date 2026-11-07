@@ -434,7 +434,9 @@ class PurchaseOrderController extends Controller
      *  M7 — a change to the product's purchase_price /
      *  purchase_discount_percent here is recorded in
      *  ProductPriceHistory. M8 — receiving past a product's max_stock
-     *  (when set) is rejected.
+     *  (when set) is rejected, unless the receive form's
+     *  allow_max_stock_update flag is ticked (M8b) — then the
+     *  product's max_stock is raised to the new stock instead.
      *  v3.0 FEATURE 1 — per-line OPTIONAL batch_no + expiry_date inputs
      *  (see the receive form): each received line also creates one
      *  ProductBatch. A blank batch_no auto-generates
@@ -458,6 +460,7 @@ class PurchaseOrderController extends Controller
             'items.*.batch_no' => ['nullable', 'string', 'max:255'],
             'items.*.expiry_date' => ['nullable', 'date'],
             'allow_over_receive' => ['nullable', 'boolean'],
+            'allow_max_stock_update' => ['nullable', 'boolean'],
         ]);
 
         $poItems = $purchaseOrder->items()->with('product')->get();
@@ -515,8 +518,14 @@ class PurchaseOrderController extends Controller
             }
         }
 
+        // M8b — ticked on the form: stock going over max_stock raises
+        // the product's max_stock to the new stock instead of blocking.
+        // Collected inside the transaction as [product_id => [name, old, new]].
+        $allowMaxStockUpdate = $request->boolean('allow_max_stock_update');
+        $maxStockUpdated = [];
+
         try {
-            DB::transaction(function () use ($purchaseOrder, $data) {
+            DB::transaction(function () use ($purchaseOrder, $data, $allowMaxStockUpdate, &$maxStockUpdated) {
                 // H12c — lock first, then check status inside the lock.
                 $locked = PurchaseOrder::lockForUpdate()->findOrFail($purchaseOrder->id);
                 if ($locked->status === 'received') {
@@ -530,13 +539,24 @@ class PurchaseOrderController extends Controller
                 foreach ($locked->items()->with('product')->get() as $lineIndex => $item) {
                     $receivedQty = (float) $data['items'][$item->id]['received_quantity'];
 
-                    // M8 — refuse receiving past max_stock when it is set.
+                    // M8 — refuse receiving past max_stock when it is set,
+                    // unless the M8b flag is ticked: then collect the raise
+                    // and apply it once per product after the loop, at the
+                    // final projected stock (same product on two lines
+                    // overwrites with the later, larger projection).
                     $projectedStock[$item->product_id] = ($projectedStock[$item->product_id] ?? (float) $item->product->stock) + $receivedQty;
                     if ($item->product->max_stock !== null && $projectedStock[$item->product_id] > (float) $item->product->max_stock) {
-                        throw new \RuntimeException(
-                            "\"{$item->product->name}\" ki stock {$projectedStock[$item->product_id]} ho jaye gi, jo max stock ({$item->product->max_stock}) se zyada hai. "
-                            . 'Max stock barhayein ya received quantity kam karein.'
-                        );
+                        if (!$allowMaxStockUpdate) {
+                            throw new \RuntimeException(
+                                "\"{$item->product->name}\" ki stock {$projectedStock[$item->product_id]} ho jaye gi, jo max stock ({$item->product->max_stock}) se zyada hai. "
+                                . 'Max stock barhayein ya received quantity kam karein. Agar max stock waqai barhana hai to "Max stock auto-update karein" tick karke dobara submit karein.'
+                            );
+                        }
+                        $maxStockUpdated[$item->product_id] = [
+                            'name' => $item->product->name,
+                            'old' => $item->product->max_stock,
+                            'new' => $projectedStock[$item->product_id],
+                        ];
                     }
 
                     $item->update(['received_quantity' => $receivedQty]);
@@ -609,6 +629,12 @@ class PurchaseOrderController extends Controller
                         }
                     }
                 }
+                // M8b — apply the max_stock raises collected above,
+                // once per product at the final projected stock.
+                foreach ($maxStockUpdated as $productId => $raise) {
+                    Product::whereKey($productId)->update(['max_stock' => $raise['new']]);
+                }
+
                 // v3.1.0 (H13): record WHEN the PO was received
                 // alongside the status. (The backfill of already-
                 // received POs is a separate migration; this only
@@ -635,6 +661,10 @@ class PurchaseOrderController extends Controller
         }
 
         $status = 'PO marked received — stock updated with actual received quantities.';
+        if ($maxStockUpdated !== []) {
+            $raised = array_map(fn ($r) => "\"{$r['name']}\" (max {$r['old']} → {$r['new']})", array_values($maxStockUpdated));
+            $status .= ' Max stock auto-updated for: ' . implode(', ', $raised) . '.';
+        }
         if ($pastExpiryWarnings !== []) {
             $status .= ' Warning: expiry date already passed for: ' . implode(', ', $pastExpiryWarnings) . '. This stock is expired on arrival — check the Batches / Expiry page before selling it.';
         }

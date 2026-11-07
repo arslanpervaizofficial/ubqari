@@ -60,6 +60,12 @@
         {{ __('Over-shipment allow karein (kisi line ki received quantity ordered se zyada ho to bhi accept karein)') }}
     </label>
 
+    {{-- M8b: stock going over max_stock: tick to raise max_stock to the new stock instead of blocking. --}}
+    <label class="flex items-center gap-2 text-sm text-gray-600 mb-4">
+        <input type="checkbox" name="allow_max_stock_update" value="1">
+        {{ __('Max stock auto-update karein (stock max se zyada ho to max stock nayi stock ke barabar kar dein)') }}
+    </label>
+
     <div class="flex justify-end gap-2">
         <a href="{{ route('purchase-orders.index') }}" class="btn btn-gray">{{ __('Cancel') }}</a>
         <button class="btn btn-solid-green">{{ __('Confirm Received') }}</button>
